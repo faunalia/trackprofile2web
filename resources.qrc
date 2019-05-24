@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/track_profile_2_web" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>

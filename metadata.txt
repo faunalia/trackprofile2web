@@ -1,0 +1,39 @@
+# This file contains metadata for your plugin. Since 
+# version 2.0 of QGIS this is the proper way to supply 
+# information about a plugin. The old method of 
+# embedding metadata in __init__.py will 
+# is no longer supported since version 2.0.
+
+# This file should be included when you package your plugin.# Mandatory items:
+
+[general]
+name=Track Profile to Web
+qgisMinimumVersion=3.0
+description=Leaflet interactive web profiles.
+version=1
+author=Matteo Ghetta
+email=matteo.ghetta@faunalia.eu
+
+about=With this plugin you can export an interactive leaflet map with a profile. E.g. an elevation profile of a route. This plugin uses the <a href="https://github.com/Raruto/leaflet-elevation">Leaflet Elevation library</a> of <a href="https://github.com/Raruto"<Raruto</a>.
+
+tracker=https://github.com/faunalia/trackprofile2web/issues
+repository=https://github.com/faunalia/trackprofile2web
+# End of mandatory metadata
+
+# Recommended items:
+
+# Uncomment the following line and add your changelog:
+# changelog=
+
+# Tags are comma separated with spaces allowed
+tags=leaflet, profile, elevation, route, web
+
+homepage=https://github.com/faunalia/trackprofile2web
+category=Web
+icon=icon.png
+# experimental flag
+experimental=False
+
+# deprecated flag (applies to the whole plugin, not just a single version)
+deprecated=False
+
