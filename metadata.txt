@@ -10,7 +10,7 @@
 name=Track Profile to Web
 qgisMinimumVersion=3.0
 description=Leaflet interactive web profiles.
-version=1
+version=1.1
 author=Matteo Ghetta
 email=matteo.ghetta@faunalia.eu
 
@@ -23,7 +23,11 @@ repository=https://github.com/faunalia/trackprofile2web
 # Recommended items:
 
 # Uncomment the following line and add your changelog:
-# changelog=
+changelog=1.1 giroditalia
+  - [Feature] shareyourtrack contest!
+  - [Feature] Help tab with hints
+  - [Feature] Type your custom TileMap
+  - [Bugfix] Open browser also in not Linux systems
 
 # Tags are comma separated with spaces allowed
 tags=leaflet, profile, elevation, route, web

@@ -131,7 +131,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.profile_combo.setEnabled(False)
 
 
-
     def refreshState(self):
         '''
         When Detached profile checkbox is checked enable buttons accordingly
@@ -247,13 +246,18 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         data = data[:-1]
         data += ''']}'''
 
+        print(self.basemap_combo.currentText())
+
         # set the user options to the dictionary
         self.opts["elevationControl"]["data"] = data
         self.opts["elevationControl"]["options"]["detachedView"] = self.detach_check.isChecked()
         self.opts["elevationControl"]["options"]["position"] = self.profile_position[self.profile_combo.currentText()]
         self.opts["elevationControl"]["options"]["collapsed"] = self.profile_collapse.isChecked()
         self.opts["layersControl"]["options"]["collapsed"] = self.layers_collapse.isChecked()
-        self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]
+        try:
+            self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]
+        except KeyError as e:
+            self.opts["otmLayer"]["url"] = self.basemap_combo.currentText()
 
         # get the path of the template.html file used to write the final file
         self.fin = os.path.join(os.path.dirname(__file__), 'template.html')
@@ -302,10 +306,9 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def openBrowser(self):
         '''
-        Open the html in Browser (default Firefox)
+        Open the html in Browser
         '''
 
-        webbrowser.get('firefox')
         webbrowser.open(self.fout)
 
 
