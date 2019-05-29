@@ -115,7 +115,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.bar = QgsMessageBar()
         self.bar.setSizePolicy( QSizePolicy.Minimum, QSizePolicy.Fixed )
         self.setLayout(QGridLayout())
-        self.layout().addWidget(self.bar, 0, 0, 1, 0)
+        self.layout().addWidget(self.bar, 1, 0, 1, 1)
 
         # connect buttons to specific functions
         self.update_btn.clicked.connect(self.changeMap)
@@ -129,6 +129,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # set profile postion buttons as disabled
         self.label_position.setEnabled(False)
         self.profile_combo.setEnabled(False)
+        self.auto_hide.setEnabled(False)
 
 
     def refreshState(self):
@@ -138,9 +139,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         if not self.detach_check.isChecked():
             self.label_position.setEnabled(True)
             self.profile_combo.setEnabled(True)
+            self.auto_hide.setEnabled(True)
         else:
             self.label_position.setEnabled(False)
             self.profile_combo.setEnabled(False)
+            self.auto_hide.setEnabled(False)
 
     def refreshState2(self):
         '''
@@ -183,9 +186,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 "position": 'topright',
                 "theme": 'custom-theme',
                 "useHeightIndicator": True,
-                "collapsed": False,
-                "detachedView": True,
+                "collapsed": True,
+                "detachedView": False,
                 "elevationDiv": '#elevation-div',
+                "followPositionMarker": False,
+                "autohide": False,
               },
             },
             "layersControl": {
@@ -251,8 +256,10 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # set the user options to the dictionary
         self.opts["elevationControl"]["data"] = data
         self.opts["elevationControl"]["options"]["detachedView"] = self.detach_check.isChecked()
+        self.opts["elevationControl"]["options"]["followPositionMarker"] = self.follow_track.isChecked()
         self.opts["elevationControl"]["options"]["position"] = self.profile_position[self.profile_combo.currentText()]
         self.opts["elevationControl"]["options"]["collapsed"] = self.profile_collapse.isChecked()
+        self.opts["elevationControl"]["options"]["autohide"] = self.auto_hide.isChecked()
         self.opts["layersControl"]["options"]["collapsed"] = self.layers_collapse.isChecked()
         try:
             self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]
