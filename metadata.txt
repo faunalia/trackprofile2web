@@ -14,7 +14,7 @@ version=1.2
 author=Matteo Ghetta
 email=matteo.ghetta@faunalia.eu
 
-about=With this plugin you can export an interactive leaflet map with a profile. E.g. an elevation profile of a route. This plugin uses the <a href="https://github.com/Raruto/leaflet-elevation">Leaflet Elevation library</a> of <a href="https://github.com/Raruto"<Raruto</a>.
+about=With this plugin you can export an interactive leaflet map with a profile. E.g. an elevation profile of a route. This plugin uses the <a href="https://github.com/Raruto/leaflet-elevation">Leaflet Elevation library</a> of <a href="https://github.com/Raruto">Raruto</a>.
 
 tracker=https://github.com/faunalia/trackprofile2web/issues
 repository=https://github.com/faunalia/trackprofile2web
