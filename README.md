@@ -17,7 +17,7 @@ The workflow is very simple:
 If you want you can export the map as a single `html` file or as `html` +
 `geojson`. The results can be easily embedded in a web page.
 
-[Click to see a life example](https://www.faunalia.eu/it/dev/trackprofile2web).
+[Click to see a live example](https://www.faunalia.eu/it/dev/trackprofile2web).
 
-Special thanks to [raruto](https://github.com/Raruto) and his awesome [leaflet-elevation](https://www.faunalia.eu/it/dev/trackprofile2web)
+Special thanks to [Raruto](https://github.com/Raruto) and his awesome [leaflet-elevation](https://github.com/Raruto/leaflet-elevation)
 library!
