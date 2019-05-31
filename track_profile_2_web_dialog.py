@@ -98,6 +98,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
                 }
             ),
+            ('WikimediaMap', {
+                'tile': 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png',
+                'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+                }
+            ),
             ('Google', {
                 'tile': 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
                 'attribution': ''
