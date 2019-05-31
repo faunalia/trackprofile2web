@@ -219,7 +219,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             "otmLayer": {
               "url" : None,
               "options": {
-                "attribution": 'caneeee',
+                "attribution": '',
               }
             },
         }
