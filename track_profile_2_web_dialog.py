@@ -28,6 +28,7 @@ from shutil import copyfile
 import json
 import tempfile
 import webbrowser
+import re
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
@@ -342,8 +343,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         '''
 
         dir_path = QFileDialog.getExistingDirectory(None, self.tr("Select Directory"))
-        htlm_name = os.path.join(dir_path, 'leaflet_profile.html')
-        gjson_name = os.path.join(dir_path, 'geo.geojson')
+        html_name = os.path.join(dir_path, 'leaflet_profile.html')
+        # remove all spaces from name
+        gjson_name = os.path.join(dir_path, '{}.geojson'.format(
+            re.sub(r'\s+','', self.vlayer.name())
+        ))
 
         output = QgsVectorFileWriter.writeAsVectorFormat(
             layer=self.vlayer,
@@ -359,7 +363,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # write the final file
         try:
-            with open(htlm_name, 'w') as fog:
+            with open(html_name, 'w') as fog:
                 fog.writelines(self.lines)
             self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.Info, duration=3)
         except:
