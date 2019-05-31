@@ -87,10 +87,27 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         mapview_settings.setAttribute(QWebSettings.DeveloperExtrasEnabled, True)
         mapview_settings.setAttribute(QWebSettings.Accelerated2dCanvasEnabled, True)
 
-        # list as Tiles as OrderedDict
         self.tile_maps = OrderedDict([
-            ('OpenTopoMap', 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'),
-            ('OpenStreetMap', 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+            ('OpenTopoMap', {
+                'tile': 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+                'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenTopoMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+                }
+            ),
+            ('OpenStreetMap', {
+                'tile': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+                }
+            ),
+            ('Google', {
+                'tile': 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+                'attribution': ''
+                }
+            ),
+            ('ESRI Satellite Map', {
+                'tile': 'http://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                'attribution': '&copy; <a href="http://www.esri.com/">Esri</a>'
+                }
+            )
         ])
         self.basemap_combo.clear()
         for k, v in self.tile_maps.items():
@@ -202,9 +219,9 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             "otmLayer": {
               "url" : None,
               "options": {
-                "attribution": 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
+                "attribution": 'caneeee',
               }
-            }
+            },
         }
 
 
@@ -252,8 +269,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         data = data[:-1]
         data += ''']}'''
 
-        print(self.basemap_combo.currentText())
-
         # set the user options to the dictionary
         self.opts["elevationControl"]["data"] = data
         self.opts["elevationControl"]["options"]["detachedView"] = self.detach_check.isChecked()
@@ -263,7 +278,8 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.opts["elevationControl"]["options"]["autohide"] = self.auto_hide.isChecked()
         self.opts["layersControl"]["options"]["collapsed"] = self.layers_collapse.isChecked()
         try:
-            self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]
+            self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]['tile']
+            self.opts["otmLayer"]["options"]["attribution"] = self.tile_maps[self.basemap_combo.currentText()]['attribution']
         except KeyError as e:
             self.opts["otmLayer"]["url"] = self.basemap_combo.currentText()
 
