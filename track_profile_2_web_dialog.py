@@ -363,12 +363,12 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         write the html and the geojson file.
         '''
 
+        export_name = re.sub(r'\s+','-', self.vlayer.name())
+
         dir_path = QFileDialog.getExistingDirectory(None, self.tr("Select Directory"))
-        html_name = os.path.join(dir_path, 'leaflet_profile.html')
+        html_name = os.path.join(dir_path, '{}.html'.format(export_name))
         # remove all spaces from name
-        gjson_name = os.path.join(dir_path, '{}.geojson'.format(
-            re.sub(r'\s+','', self.vlayer.name())
-        ))
+        gjson_name = os.path.join(dir_path, '{}.geojson'.format(export_name))
 
         output = QgsVectorFileWriter.writeAsVectorFormat(
             layer=self.vlayer,
