@@ -38,13 +38,16 @@ from qgis.PyQt.QtCore import (
     QFileInfo
 )
 
+import processing
+
 from qgis.PyQt.QtGui import(
     QColor
 )
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QSizePolicy,
-    QGridLayout
+    QGridLayout,
+    QPushButton
 )
 
 from qgis.core import (
@@ -189,7 +192,24 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # Check if the layer as Z values, if not stop the algorithm
         if not QgsWkbTypes.hasZ(self.vlayer.wkbType()):
-            self.bar.pushMessage(self.tr("The selected layer has not Z values. Add them using the Drape algorithm of the Processing toolbox"), "", level=Qgis.Critical)
+
+            def open_drape():
+                '''
+                function to open Processing algorithm dialog, used later
+                '''
+                processing.execAlgorithmDialog('native:setzfromraster')
+
+            # create the widget with the message that will be shown
+            widget = self.bar.createMessage(self.tr("The selected layer has not Z values. Add them using the Drape algorithm of the Processing toolbox"))
+            # create the button to put into the messageBar
+            button = QPushButton(widget)
+            button.setText(self.tr('Open Drape Algorithm?'))
+            # connect the button to the function to open the drape algorithm
+            button.pressed.connect(open_drape)
+            # add the button to the messageBar widget
+            widget.layout().addWidget(button)
+            # create the messageBar with the message and the button
+            self.bar.pushWidget(widget, Qgis.Critical, duration=10)
             return
 
         # dictionary of all the js functions, will be json dumped after
