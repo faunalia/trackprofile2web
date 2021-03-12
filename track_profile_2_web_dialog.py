@@ -215,27 +215,41 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # dictionary of all the js functions, will be json dumped after
         self.opts = {
             "map": {
-              "center": [41.4583, 12.7059],
-              "zoom": 5,
-              "markerZoomAnimation": False,
-              "zoomControl": False,
+                "mapTypeId": 'terrain',
+                "center": [41.4583, 12.7059],
+                "zoom": 5,
+            #   "markerZoomAnimation": False,
+            #   "zoomControl": False,
             },
             "zoomControl": {
-              "position": 'topleft',
+                "position": 'topleft',
             },
             "elevationControl": {
-              "data": None, #sample data placeholder
-              "options": {
-                "position": 'topright',
+                "data": None, #sample data placeholder
                 "theme": 'custom-theme',
-                "useHeightIndicator": True,
-                "collapsed": True,
-                "detachedView": False,
                 "elevationDiv": '#elevation-div',
-                "followPositionMarker": False,
+                "detached": True,
+                "position": 'topright',
                 "autohide": False,
-              },
-            },
+                "collapsed": True,
+                "position": 'topright',
+                "followMarker": False,
+                "autofitBounds": True,
+                "imperial": False,
+                "reverseCoords": False,
+                "acceleration": False,
+                "slope": False,
+                "speed": False,
+                "time": False,
+                "distance": True,
+                "altitude": True,
+                "summary": 'multiline',
+                "ruler": True,
+                "legend": True,
+                "almostOver": True,
+                "distanceMarkers": False,
+                "preferCanvas": True
+                },
             "layersControl": {
               "options": {
                 "collapsed": True,
@@ -267,7 +281,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 geometry.transform(xform)
                 i.setGeometry(geometry)
 
-            data += '{ "type": "Feature", "properties": { }, "geometry": { "type": "MultiLineString", "coordinates": [ ['
+            data += '{ "type": "Feature", "properties": { }, "geometry": { "type": "LineString", "coordinates": [ '
 
             # check and tweak the layer if it is MultiPart and has Multiparts
             if geometry.isMultipart() and i.geometry().constGet().partCount() > 1:
@@ -277,7 +291,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 for geom in g:
                     for part in geom.constParts():
                         for coord in part:
-                            data += ' [ {}, {},{} ],'.format(coord.x(), coord.y(), coord.z())
+                            data += ' [{}, {}, {}],'.format(coord.x(), coord.y(), coord.z())
 
             # if the layer is not MultiPart continue
             else:
@@ -285,22 +299,22 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
                 for part in g:
                     for coord in part.vertices():
-                        data += ' [ {}, {},{} ],'.format(coord.x(), coord.y(), coord.z())
+                        data += ' [{}, {}, {}],'.format(coord.x(), coord.y(), coord.z())
 
             data = data[:-1]
 
-            data += ']] } },'
+            data += '] } },'
 
         data = data[:-1]
         data += ''']}'''
 
         # set the user options to the dictionary
         self.opts["elevationControl"]["data"] = data
-        self.opts["elevationControl"]["options"]["detachedView"] = self.detach_check.isChecked()
-        self.opts["elevationControl"]["options"]["followPositionMarker"] = self.follow_track.isChecked()
-        self.opts["elevationControl"]["options"]["position"] = self.profile_position[self.profile_combo.currentText()]
-        self.opts["elevationControl"]["options"]["collapsed"] = self.profile_collapse.isChecked()
-        self.opts["elevationControl"]["options"]["autohide"] = self.auto_hide.isChecked()
+        self.opts["elevationControl"]["detached"] = self.detach_check.isChecked()
+        self.opts["elevationControl"]["followMarker"] = self.follow_track.isChecked()
+        self.opts["elevationControl"]["position"] = self.profile_position[self.profile_combo.currentText()]
+        self.opts["elevationControl"]["collapsed"] = self.profile_collapse.isChecked()
+        self.opts["elevationControl"]["autohide"] = self.auto_hide.isChecked()
         self.opts["layersControl"]["options"]["collapsed"] = self.layers_collapse.isChecked()
         try:
             self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]['tile']
