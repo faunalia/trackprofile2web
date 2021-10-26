@@ -121,6 +121,17 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         for k, v in self.tile_maps.items():
             self.basemap_combo.addItem(k, v)
 
+        # list of default base map tile providers
+        # self.base_maptypes = OrderedDict([
+        #     (self.tr('OpenStreetMap'), 'osm'),
+        #     (self.tr('OpenTopoMap'), 'topo'),
+        #     (self.tr('ESRI Satellite'), 'satellite'),
+        #     (self.tr('OpenCycleMap'), 'terrain')
+        # ])
+        # self.basemap_combo.clear()
+        # for k, v in self.base_maptypes.items():
+        #     self.basemap_combo.addItem(k, v)
+
         # list of attached profile positions as OrderedDict
         self.profile_position = OrderedDict([
             (self.tr('Top Right'), 'topright'),
@@ -133,9 +144,9 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             self.profile_combo.addItem(k, v)
 
         # set default colors
-        self.profile_color.setColor(QColor('#d45f5f'))
-        self.marker_color.setColor(QColor('#ffb800'))
-        self.line_color.setColor(QColor('#ff0000'))
+        self.profile_color.setColor(QColor('#36c'))
+        self.marker_color.setColor(QColor('#fff'))
+        self.line_color.setColor(QColor('#36c'))
 
         # create instance of QgsMessageBar (used later)
         self.bar = QgsMessageBar()
@@ -215,14 +226,30 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # dictionary of all the js functions, will be json dumped after
         self.opts = {
             "map": {
-                "mapTypeId": 'terrain',
+                "mapTypeId": 'osm',
+                "mapTypeIds": [],
                 "center": [41.4583, 12.7059],
                 "zoom": 5,
-            #   "markerZoomAnimation": False,
-            #   "zoomControl": False,
-            },
-            "zoomControl": {
-                "position": 'topleft',
+                "preferCanvas": False,
+                "fullscreenControl": False,
+                "layersControl": False,
+                "locateControl": False,
+                "minimapControl": False,
+                "pegmanControl": False,
+                "printControl": False,
+                "rotateControl": False,
+                "resizerControl": True,
+                "searchControl": False,
+                "gestureHandling": False,
+                "loadingControl": False,
+                "zoomControl": {
+                    "position": 'topleft',
+                },
+                # "plugins": [
+                #     "d3@5.0.0/dist/d3.js",
+                #     "@raruto/leaflet-elevation/dist/leaflet-elevation.min.css",
+                #     "@raruto/leaflet-elevation/dist/leaflet-elevation.js",
+                # ],
             },
             "elevationControl": {
                 "data": None, #sample data placeholder
@@ -243,17 +270,15 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 "time": False,
                 "distance": True,
                 "altitude": True,
-                "summary": 'multiline',
+                "summary": 'inline',
                 "ruler": True,
                 "legend": True,
                 "almostOver": True,
                 "distanceMarkers": False,
-                "preferCanvas": True
-                },
+                "preferCanvas": False
+            },
             "layersControl": {
-              "options": {
                 "collapsed": True,
-              },
             },
             "otmLayer": {
               "url" : None,
@@ -315,12 +340,32 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.opts["elevationControl"]["position"] = self.profile_position[self.profile_combo.currentText()]
         self.opts["elevationControl"]["collapsed"] = self.profile_collapse.isChecked()
         self.opts["elevationControl"]["autohide"] = self.auto_hide.isChecked()
-        self.opts["layersControl"]["options"]["collapsed"] = self.layers_collapse.isChecked()
+        self.opts["layersControl"]["collapsed"] = self.layers_collapse.isChecked()
+
         try:
             self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]['tile']
             self.opts["otmLayer"]["options"]["attribution"] = self.tile_maps[self.basemap_combo.currentText()]['attribution']
         except KeyError as e:
             self.opts["otmLayer"]["url"] = self.basemap_combo.currentText()
+
+        # try:
+        #     self.opts["map"]["mapTypeId"] = self.base_maptypes[self.basemap_combo.currentText()]
+        # except KeyError as e:
+        #     self.opts["map"]["mapTypeId"] = "custom"
+        #     self.opts["map"]["mapTypeIds"] = ["custom"]
+        #     self.opts["map"]["mapTypes"] = {
+        #         "custom": {
+        #             "name": "Base Layer",
+        #             "url": self.basemap_combo.currentText(),
+        #             # "options": {
+        #             #     "minZoom": 0,
+        #             #     "maxZoom": 24,
+        #             #     "maxNativeZoom": 18,
+        #             #     "tileSize": 256,
+        #             #     "attribution": "Map data: &copy;"
+        #             # },
+        #         }
+        #     }
 
         # get the path of the template.html file used to write the final file
         self.fin = os.path.join(os.path.dirname(__file__), 'template.html')
