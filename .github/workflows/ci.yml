@@ -20,8 +20,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            python3-behave python3-pyqt6.qtwebchannel python3-pyqt6.qtwebengine qt6-l10n-tools
-          echo "/usr/lib/qt6/bin" >> "$GITHUB_PATH"
+            python3-behave python3-pyqt6.qtwebchannel python3-pyqt6.qtwebengine
       - name: Run QGIS scenarios
         run: |
           python3 -m behave test/features/plugin.feature --tags=@qgis
@@ -37,4 +36,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install behave==1.3.3 playwright==1.58.0
       - name: Run browser and metadata scenarios
-        run: python -m behave test/features --tags="not @qgis"
+        run: python -m behave test/features --tags="not @qgis and not @unit"
+      - name: Run packaging and upload scenarios
+        run: python -m behave test/features --tags=@unit

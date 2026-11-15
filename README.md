@@ -27,7 +27,7 @@ If you want you can export the map as a single `html` file or as `html` +
 the exported page. The results can be easily embedded in a web page.
 
 The settings interface, map configuration and styles are defined in
-`template.html`; `track_profile_2_web.py` handles QGIS integration and exports.
+`track_profile_2_web.html`; `track_profile_2_web.py` handles QGIS integration and exports.
 
 [Click to see a live example](https://www.faunalia.eu/it/dev/trackprofile2web).
 
@@ -36,11 +36,10 @@ library!
 
 ## BDD tests
 
-GitHub Actions runs the QGIS, browser and metadata scenarios on pushes and pull
-requests.
+GitHub Actions runs the QGIS, browser, metadata and `@unit` scenarios on pushes
+and pull requests.
 
-Install `behave` in the QGIS 4 Python environment and Qt's `lrelease` on PATH
-(required by the translation scenario). From an OSGeo4W shell:
+Install `behave` in the QGIS 4 Python environment. From an OSGeo4W shell:
 
 ```shell
 python-qgis -m behave test\features --tags=qgis
@@ -50,5 +49,24 @@ The browser scenarios require `behave`, `playwright`, Google Chrome and
 internet access. Run them and the metadata scenario with:
 
 ```shell
-python -m behave test\features --tags="not qgis"
+python -m behave test\features --tags="not @qgis and not @unit"
 ```
+
+Run packaging and upload scenarios without QGIS or browser dependencies:
+
+```shell
+python -m behave test\features --tags=@unit
+```
+
+The Makefile packaging and upload scenarios require a Unix shell.
+
+## Packaging and translations
+
+On Unix, `make upload` builds the plugin ZIP and uploads it to the QGIS plugin
+repository, prompting for an OSGeo username and password. Set `QGISDIR` if the
+QGIS 4 plugin directory differs from the Makefile default. Upload an existing
+`track_profile_2_web.zip` with `make upload-existing`.
+
+To add translations, set `LOCALES` in the Makefile and run `make transup` and
+`make transcompile` with `pylupdate6` and `lrelease` available on PATH.
+The resulting `i18n/TrackProfile2web_<locale>.qm` files are included in the ZIP.

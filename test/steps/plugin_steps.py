@@ -1,7 +1,16 @@
+import base64
 import configparser
+import os
+import shlex
 import shutil
 import subprocess
+import sys
+import threading
+import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from xmlrpc.client import Fault
+from xmlrpc.server import SimpleXMLRPCRequestHandler, SimpleXMLRPCServer
 
 from behave import given, then, when
 
@@ -35,28 +44,6 @@ def check_providers(context):
     assert {"gdal", "ogr", "postgres"} <= set(QgsProviderRegistry.instance().providerList())
 
 
-@when("I load the WGS 84 WKT and sample raster")
-def load_crs(context):
-    from qgis.core import QgsCoordinateReferenceSystem, QgsRasterLayer
-
-    wkt = ('GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",'
-           'SPHEROID["WGS_1984",6378137.0,298.257223563]],'
-           'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
-    context.crs = QgsCoordinateReferenceSystem()
-    assert context.crs.createFromWkt(wkt)
-    context.raster = QgsRasterLayer(
-        str(ROOT / "test" / "fixtures" / "tenbytenraster.asc"),
-        "TestRaster"
-    )
-    assert context.raster.isValid()
-
-
-@then("both reference systems describe WGS 84")
-def check_crs(context):
-    assert context.crs.authid() == "EPSG:4326"
-    assert context.raster.crs().authid() in ("EPSG:4326", "OGC:CRS84")
-
-
 @when("I {action} the dialog")
 def finish_dialog(context, action):
     if action == "accept":
@@ -73,20 +60,171 @@ def check_dialog_result(context, result):
     assert context.dialog.result() == expected[result]
 
 
-@when("I compile and install the Afrikaans translation")
-def install_translation(context):
-    from qgis.PyQt.QtCore import QCoreApplication, QTranslator
+class AuthenticatedHandler(SimpleXMLRPCRequestHandler):
+    rpc_paths = ("/plugins/RPC2/",)
 
-    compiler = shutil.which("lrelease") or shutil.which("pyside6-lrelease")
-    assert compiler, "Install Qt's lrelease to run the translation scenario"
-    output = Path(context.tempdir.name) / "af.qm"
-    subprocess.run([compiler, str(ROOT / "i18n" / "af.ts"), "-qm", str(output)], check=True)
-    context.translator = QTranslator()
-    assert context.translator.load(str(output))
-    assert QCoreApplication.installTranslator(context.translator)
+    def do_POST(self):
+        if self.headers.get("Authorization") != self.server.expected_auth:
+            self.send_error(401, "Unauthorized")
+            return
+        super().do_POST()
 
 
-@then('"{source}" is translated as "{translation}"')
-def check_translation(context, source, translation):
-    from qgis.PyQt.QtCore import QCoreApplication
-    assert QCoreApplication.translate("@default", source) == translation
+@given("a plugin package and a local repository")
+def local_repository(context):
+    if os.name != "posix":
+        context.scenario.skip("Makefile upload requires a Unix shell")
+        return
+    context.package_dir = Path(context.tempdir.name)
+    shutil.copy(ROOT / "Makefile", context.package_dir / "Makefile")
+    context.package = context.package_dir / "track_profile_2_web.zip"
+    context.package.write_bytes(b"test zip")
+    username, password = "user@example.test", "p@ss:word"
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    context.server = SimpleXMLRPCServer(
+        ("127.0.0.1", 0), requestHandler=AuthenticatedHandler, logRequests=False
+    )
+    context.server.expected_auth = f"Basic {token}"
+    context.received = []
+    context.server.register_function(
+        lambda data: (context.received.append(data.data) or [12, 34]), "plugin.upload"
+    )
+    context.server_thread = threading.Thread(target=context.server.serve_forever)
+    context.server_thread.start()
+    context.options = SimpleNamespace(
+        username=username, password=password,
+        server="127.0.0.1", port=context.server.server_address[1]
+    )
+
+
+def upload_package(context):
+    url = f"http://127.0.0.1:{context.options.port}/plugins/RPC2/"
+    context.result = subprocess.run(
+        ["make", "-o", "zip", "upload", f"UPLOAD_URL={url}", f"PYTHON={shlex.quote(sys.executable)}"],
+        cwd=context.package_dir, input=f"{context.options.username}\n{context.options.password}\n",
+        capture_output=True, text=True, start_new_session=True, timeout=30
+    )
+
+
+@when("I upload the package with valid credentials")
+def upload_with_valid_credentials(context):
+    upload_package(context)
+
+
+@then("the repository receives the package and returns its identifiers")
+def check_uploaded_package(context):
+    assert context.result.returncode == 0, context.result.stderr
+    assert context.received == [b"test zip"]
+    assert "Plugin ID: 12" in context.result.stdout
+    assert "Version ID: 34" in context.result.stdout
+
+
+@when("I upload the package with invalid credentials")
+def upload_with_invalid_credentials(context):
+    context.options.password = "wrong@password"
+    upload_package(context)
+
+
+@then("the upload fails without exposing credentials")
+def check_authentication_failure(context):
+    assert context.result.returncode != 0
+    assert context.received == []
+    assert "HTTP 401" in context.result.stderr
+    output = context.result.stdout + context.result.stderr
+    assert "p@ss:word" not in output
+    assert context.options.password not in output
+
+
+@when("the repository rejects the uploaded package")
+def reject_package(context):
+    def reject(data):
+        raise Fault(10, "Plugin rejected")
+
+    context.server.register_function(reject, "plugin.upload")
+    upload_package(context)
+
+
+@then("the upload reports the rejection")
+def check_rejection(context):
+    assert context.result.returncode != 0
+    assert "Plugin rejected" in context.result.stderr
+
+
+@when("I upload a missing package with Make")
+def upload_missing_package(context):
+    if os.name != "posix":
+        context.scenario.skip("Makefile upload requires a Unix shell")
+        return
+    package_dir = Path(context.tempdir.name)
+    shutil.copy(ROOT / "Makefile", package_dir / "Makefile")
+    context.result = subprocess.run(
+        ["make", "upload-existing", f"PYTHON={shlex.quote(sys.executable)}"],
+        cwd=package_dir, input="user\npassword\n", capture_output=True, text=True,
+        start_new_session=True, timeout=30
+    )
+
+
+@then("the upload command reports failure")
+def check_missing_package(context):
+    assert context.result.returncode != 0
+    assert "Upload failed" in context.result.stderr
+
+
+@when("I configure an insecure remote upload URL")
+def insecure_upload_url(context):
+    if os.name != "posix":
+        context.scenario.skip("Makefile upload requires a Unix shell")
+        return
+    package_dir = Path(context.tempdir.name)
+    shutil.copy(ROOT / "Makefile", package_dir / "Makefile")
+    context.result = subprocess.run(
+        ["make", "upload-existing", "UPLOAD_URL=http://example.test/plugins/RPC2/",
+         f"PYTHON={shlex.quote(sys.executable)}"],
+        cwd=package_dir, input="user\npassword\n", capture_output=True, text=True,
+        start_new_session=True, timeout=30
+    )
+
+
+@then("the upload rejects the URL before requesting credentials")
+def check_insecure_upload_url(context):
+    assert context.result.returncode != 0
+    assert "Upload requires HTTPS" in context.result.stderr
+    assert "Please enter user name" not in context.result.stdout
+
+
+@given("a plugin ready for packaging with two translations")
+def prepare_package(context):
+    if os.name != "posix":
+        context.scenario.skip("Makefile packaging requires a Unix shell")
+        return
+    context.package_dir = Path(context.tempdir.name)
+    for name in ("Makefile", "__init__.py", "track_profile_2_web.py",
+                 "metadata.txt", "icon.png", "track_profile_2_web.html", "LICENSE"):
+        shutil.copy(ROOT / name, context.package_dir / name)
+    update = context.package_dir / "fake-update"
+    update.write_text('#!/bin/sh\nfor last do :; done\nprintf translation > "$last"\n')
+    update.chmod(0o755)
+    release = context.package_dir / "fake-release"
+    release.write_text('#!/bin/sh\nprintf compiled > "${1%.ts}.qm"\n')
+    release.chmod(0o755)
+
+
+@when("I build the plugin package")
+def build_package(context):
+    subprocess.run(
+        ["make", "transup", "zip", "LOCALES=it de", "PYLUPDATE=./fake-update",
+         "LRELEASE=./fake-release", "QGISDIR=deploy", f"PYTHON={shlex.quote(sys.executable)}"],
+        cwd=context.package_dir, check=True
+    )
+
+
+@then("the ZIP contains the plugin and both compiled translations")
+def check_package(context):
+    for locale in ("it", "de"):
+        assert (context.package_dir / "i18n" / f"TrackProfile2web_{locale}.ts").is_file()
+    with zipfile.ZipFile(context.package_dir / "track_profile_2_web.zip") as archive:
+        names = set(archive.namelist())
+        for name in ("LICENSE", "metadata.txt", "__init__.py", "track_profile_2_web.html",
+                     "i18n/TrackProfile2web_it.qm", "i18n/TrackProfile2web_de.qm"):
+            assert f"track_profile_2_web/{name}" in names
+        assert archive.testzip() is None

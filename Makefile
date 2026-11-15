@@ -1,5 +1,5 @@
 #/***************************************************************************
-# TrackProfile2web
+# TrackProfile2Web
 #
 # Leaflet interactive web profiles.
 #							 -------------------
@@ -28,17 +28,17 @@
 # LOCALES = af
 LOCALES =
 
-# If locales are enabled, set the name of the lrelease binary on your system. If
-# you have trouble compiling the translations, you may have to specify the full path to
-# lrelease
-#LRELEASE = lrelease
-#LRELEASE = lrelease-qt4
-
+LRELEASE ?= lrelease
+PYLUPDATE ?= pylupdate6
+PYTHON ?= python3
+UPLOAD_URL ?= https://plugins.qgis.org/plugins/RPC2/
 
 # translation
 SOURCES = \
 	__init__.py \
 	track_profile_2_web.py
+
+TS_FILES = $(addprefix i18n/TrackProfile2web_,$(addsuffix .ts,$(LOCALES)))
 
 PLUGINNAME = track_profile_2_web
 
@@ -46,7 +46,7 @@ PY_FILES = \
 	__init__.py \
 	track_profile_2_web.py
 
-EXTRAS = metadata.txt icon.png template.html
+EXTRAS = metadata.txt icon.png track_profile_2_web.html LICENSE
 
 EXTRA_DIRS =
 
@@ -57,35 +57,27 @@ PEP8EXCLUDE=pydev,conf.py,third_party,ui
 # QGISDIR points to the location where your plugin should be installed.
 # This varies by platform, relative to your HOME directory:
 #	* Linux:
-#	  .local/share/QGIS/QGIS3/profiles/default/python/plugins/
+#	  .local/share/QGIS/QGIS4/profiles/default/python/plugins/
 #	* Mac OS X:
 #	  Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins
 #	* Windows:
 #	  AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins'
 
-QGISDIR=/home/matteo/.local/share/QGIS/QGIS3/profiles/default/python/plugins/
+QGISDIR ?= $(HOME)/.local/share/QGIS/QGIS4/profiles/default/python/plugins
 
 #################################################
 # Normally you would not need to edit below here
 #################################################
 
-HELP = help/build/html
-
-PLUGIN_UPLOAD = $(c)/plugin_upload.py
-
 .PHONY: default
 default:
-	@echo While you can use make to build and deploy your plugin, pb_tool
-	@echo is a much better solution.
-	@echo A Python script, pb_tool provides platform independent management of
-	@echo your plugins and runs anywhere.
-	@echo You can install pb_tool using: pip install pb_tool
-	@echo See https://g-sherman.github.io/plugin_build_tool/ for info. 
+	@echo "Targets: test, deploy, zip, upload, upload-existing, transup, transcompile, pylint"
 
 compile: $(COMPILED_RESOURCE_FILES)
 
-%.qm : %.ts
-	$(LRELEASE) $<
+i18n/TrackProfile2web_%.ts: $(SOURCES)
+	mkdir -p i18n
+	$(PYLUPDATE) --no-obsolete $(SOURCES) --ts "$@"
 
 test:
 	@echo
@@ -94,21 +86,17 @@ test:
 	@echo "----------------------"
 	python -m behave test/features
 
-deploy: compile doc transcompile
+deploy: compile transcompile
 	@echo
 	@echo "------------------------------------------"
-	@echo "Deploying plugin to your .qgis2 directory."
+	@echo "Deploying plugin to your QGIS plugin directory."
 	@echo "------------------------------------------"
-	# The deploy  target only works on unix like operating system where
-	# the Python plugin directory is located at:
-	# $HOME/$(QGISDIR)/python/plugins
-	mkdir -p $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME)
-	cp -vf $(PY_FILES) $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME)
-	cp -vf $(EXTRAS) $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME)
-	cp -vfr i18n $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME)
-	cp -vfr $(HELP) $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME)/help
+	mkdir -p "$(QGISDIR)/$(PLUGINNAME)"
+	cp -vf $(PY_FILES) "$(QGISDIR)/$(PLUGINNAME)"
+	cp -vf $(EXTRAS) "$(QGISDIR)/$(PLUGINNAME)"
+	if [ -d i18n ]; then cp -vfr i18n "$(QGISDIR)/$(PLUGINNAME)"; fi
 	# Copy extra directories if any
-	(foreach EXTRA_DIR,(EXTRA_DIRS), cp -R (EXTRA_DIR) (HOME)/(QGISDIR)/python/plugins/(PLUGINNAME)/;)
+	$(foreach EXTRA_DIR,$(EXTRA_DIRS),cp -R "$(EXTRA_DIR)" "$(QGISDIR)/$(PLUGINNAME)/";)
 
 
 # The dclean target removes compiled python files from plugin directory
@@ -118,8 +106,8 @@ dclean:
 	@echo "-----------------------------------"
 	@echo "Removing any compiled python files."
 	@echo "-----------------------------------"
-	find $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME) -iname "*.pyc" -delete
-	find $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME) -iname ".git" -prune -exec rm -Rf {} \;
+	find "$(QGISDIR)/$(PLUGINNAME)" -iname "*.pyc" -delete
+	find "$(QGISDIR)/$(PLUGINNAME)" -iname ".git" -prune -exec rm -Rf {} \;
 
 
 derase:
@@ -127,7 +115,7 @@ derase:
 	@echo "-------------------------"
 	@echo "Removing deployed plugin."
 	@echo "-------------------------"
-	rm -Rf $(HOME)/$(QGISDIR)/python/plugins/$(PLUGINNAME)
+	rm -Rf "$(QGISDIR)/$(PLUGINNAME)"
 
 zip: deploy dclean
 	@echo
@@ -137,7 +125,7 @@ zip: deploy dclean
 	# The zip target deploys the plugin and creates a zip file with the deployed
 	# content. You can then upload the zip file on http://plugins.qgis.org
 	rm -f $(PLUGINNAME).zip
-	cd $(HOME)/$(QGISDIR)/python/plugins; zip -9r $(CURDIR)/$(PLUGINNAME).zip $(PLUGINNAME)
+	cd "$(QGISDIR)" && $(PYTHON) -m zipfile -c "$(CURDIR)/$(PLUGINNAME).zip" "$(PLUGINNAME)"
 
 package: compile
 	# Create a zip package of the plugin named $(PLUGINNAME).zip.
@@ -154,27 +142,51 @@ package: compile
 	echo "Created package: $(PLUGINNAME).zip"
 
 upload: zip
+	$(MAKE) upload-existing
+
+upload-existing:
 	@echo
 	@echo "-------------------------------------"
 	@echo "Uploading plugin to QGIS Plugin repo."
 	@echo "-------------------------------------"
-	$(PLUGIN_UPLOAD) $(PLUGINNAME).zip
+	@$(PYTHON) -c "$$(printf '%s\n' \
+	    'import getpass, sys, xmlrpc.client' \
+	    'from urllib.parse import quote, urlsplit, urlunsplit' \
+	    'url = urlsplit(sys.argv[2])' \
+	    'if not url.hostname or url.username is not None or url.password is not None:' \
+	    '    sys.exit("Invalid upload URL")' \
+	    'if url.scheme != "https" and not (url.scheme == "http" and url.hostname in ("localhost", "127.0.0.1", "::1")):' \
+	    '    sys.exit("Upload requires HTTPS except for a local repository")' \
+	    'default_user = getpass.getuser()' \
+	    'username = input("Please enter user name [%s]: " % default_user) or default_user' \
+	    'password = getpass.getpass()' \
+	    'auth = "%s:%s@" % (quote(username, safe=""), quote(password, safe=""))' \
+	    'address = urlunsplit((url.scheme, auth + url.netloc, url.path, url.query, url.fragment))' \
+	    'try:' \
+	    '    with open(sys.argv[1], "rb") as handle:' \
+	    '        package = xmlrpc.client.Binary(handle.read())' \
+	    '    with xmlrpc.client.ServerProxy(address) as server:' \
+	    '        plugin_id, version_id = server.plugin.upload(package)' \
+	    '    print("Plugin ID: %s" % plugin_id)' \
+	    '    print("Version ID: %s" % version_id)' \
+	    'except xmlrpc.client.ProtocolError as err:' \
+	    '    sys.exit("Upload failed: HTTP %d %s" % (err.errcode, err.errmsg))' \
+	    'except (xmlrpc.client.Fault, OSError) as err:' \
+	    '    sys.exit("Upload failed: %s" % err)' \
+	)" "$(PLUGINNAME).zip" "$(UPLOAD_URL)"
 
-transup:
+transup: $(TS_FILES)
 	@echo
 	@echo "------------------------------------------------"
 	@echo "Updating translation files with any new strings."
 	@echo "------------------------------------------------"
-	@chmod +x scripts/update-strings.sh
-	@scripts/update-strings.sh $(LOCALES)
 
 transcompile:
 	@echo
 	@echo "----------------------------------------"
 	@echo "Compiled translation files to .qm files."
 	@echo "----------------------------------------"
-	@chmod +x scripts/compile-strings.sh
-	@scripts/compile-strings.sh $(LRELEASE) $(LOCALES)
+	$(foreach TRANSLATION,$(TS_FILES),$(LRELEASE) "$(TRANSLATION)" &&) true
 
 transclean:
 	@echo
@@ -190,24 +202,16 @@ clean:
 	@echo "------------------------------------"
 	rm -f $(COMPILED_UI_FILES) $(COMPILED_RESOURCE_FILES)
 
-doc:
-	@echo
-	@echo "------------------------------------"
-	@echo "Building documentation using sphinx."
-	@echo "------------------------------------"
-	cd help; make html
-
 pylint:
 	@echo
 	@echo "-----------------"
 	@echo "Pylint violations"
 	@echo "-----------------"
-	@pylint --reports=n --rcfile=pylintrc . || true
+	@pylint --reports=n . || true
 	@echo
 	@echo "----------------------"
-	@echo "If you get a 'no module named qgis.core' error, try sourcing"
-	@echo "the helper script we have provided first then run make pylint."
-	@echo "e.g. source run-env-linux.sh <path to qgis install>; make pylint"
+	@echo "If you get a 'no module named qgis.core' error, run pylint"
+	@echo "from an environment configured for QGIS."
 	@echo "----------------------"
 
 

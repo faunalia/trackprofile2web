@@ -582,7 +582,7 @@ def prepare_web_profile(context, separate, detached=True):
             "markerColor": "#ff00ff", "lineColor": "#0033ff", "markerOpacity": 0.5
         },
     }
-    html = (ROOT / "template.html").read_text(encoding="utf-8")
+    html = (ROOT / "track_profile_2_web.html").read_text(encoding="utf-8")
     before, preview = html.split('<template id="qgis-preview">', 1)
     _, after = preview.split('</template>', 1)
     html = before + after

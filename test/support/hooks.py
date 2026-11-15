@@ -30,9 +30,6 @@ def before_scenario(context, scenario):
 
 
 def after_scenario(context, scenario):
-    if hasattr(context, "translator"):
-        from qgis.PyQt.QtCore import QCoreApplication
-        QCoreApplication.removeTranslator(context.translator)
     if hasattr(context, "browser"):
         context.browser.close()
         context.playwright.stop()
