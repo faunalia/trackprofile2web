@@ -18,9 +18,6 @@
 # *																		 *
 # ***************************************************************************/
 
-LOCALES =
-LRELEASE ?= lrelease
-PYLUPDATE ?= pylupdate6
 PYTHON ?= python3
 UPLOAD_URL ?= https://plugins.qgis.org/plugins/RPC2/
 
@@ -28,35 +25,24 @@ PY_FILES = \
 	__init__.py \
 	track_profile_2_web.py
 
-TS_FILES = $(addprefix i18n/TrackProfile2web_,$(addsuffix .ts,$(LOCALES)))
 PLUGINNAME = track_profile_2_web
 EXTRAS = metadata.txt icon.png track_profile_2_web.html LICENSE
 
-.PHONY: default test zip upload upload-existing transup transcompile transclean
+.PHONY: default test zip upload upload-existing
 default:
-	@echo "Targets: test, zip, upload, upload-existing, transup, transcompile, transclean"
-
-i18n/TrackProfile2web_%.ts: $(PY_FILES)
-	mkdir -p i18n
-	$(PYLUPDATE) --no-obsolete $(PY_FILES) --ts "$@"
+	@echo "Targets: test, zip, upload, upload-existing"
 
 test:
 	$(PYTHON) -m behave test/features
 
-zip: transcompile
+zip:
 	@$(PYTHON) -c "$$(printf '%s\n' \
 	    'from pathlib import Path' \
 	    'import sys, zipfile' \
 	    'name, *files = sys.argv[1:]' \
-	    'paths = [Path(file) for file in files]' \
-	    'i18n = Path("i18n")' \
-	    'if i18n.is_dir():' \
-	    '    paths.extend(path for path in (i18n, *i18n.rglob("*"))' \
-	    '                 if all(part.lower() != ".git" for part in path.parts)' \
-	    '                 and not path.name.lower().endswith(".pyc"))' \
 	    'with zipfile.ZipFile(name + ".zip", "w", zipfile.ZIP_DEFLATED) as archive:' \
-	    '    for path in paths:' \
-	    '        archive.write(path, Path(name) / path)' \
+	    '    for file in files:' \
+	    '        archive.write(file, Path(name) / file)' \
 	)" "$(PLUGINNAME)" $(PY_FILES) $(EXTRAS)
 
 upload: zip
@@ -92,11 +78,3 @@ upload-existing:
 	    'except (xmlrpc.client.Fault, OSError) as err:' \
 	    '    sys.exit("Upload failed: %s" % err)' \
 	)" "$(PLUGINNAME).zip" "$(UPLOAD_URL)"
-
-transup: $(TS_FILES)
-
-transcompile:
-	$(foreach TRANSLATION,$(TS_FILES),$(LRELEASE) "$(TRANSLATION)" &&) true
-
-transclean:
-	rm -f i18n/*.qm

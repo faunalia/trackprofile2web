@@ -60,13 +60,9 @@ python -m behave test\features --tags=@unit
 
 The Makefile packaging and upload scenarios require a Unix shell.
 
-## Packaging and translations
+## Packaging
 
 On Unix, `make zip` builds the plugin ZIP without installing it. `make upload`
 builds the ZIP and uploads it to the QGIS plugin repository, prompting for an
 OSGeo username and password. Upload an existing
 `track_profile_2_web.zip` with `make upload-existing`.
-
-To add translations, set `LOCALES` in the Makefile and run `make transup` and
-`make transcompile` with `pylupdate6` and `lrelease` available on PATH.
-The resulting `i18n/TrackProfile2web_<locale>.qm` files are included in the ZIP.

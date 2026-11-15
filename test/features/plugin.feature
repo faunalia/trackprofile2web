@@ -49,15 +49,8 @@ Feature: Plugin and QGIS requirements
     Then the upload rejects the URL before requesting credentials
 
   @unit
-  Scenario: Package translations in a plugin ZIP
-    Given a plugin ready for packaging with two translations
+  Scenario: Package the plugin
+    Given a plugin ready for packaging
     When I build the plugin package
-    Then the ZIP contains the plugin and both compiled translations
-    And the deployed plugin is unchanged
-
-  @unit
-  Scenario: Package a plugin without translations
-    Given a plugin ready for packaging without translations
-    When I build the plugin package without translations
     Then the ZIP contains only the plugin files
     And the deployed plugin is unchanged
