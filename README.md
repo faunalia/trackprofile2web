@@ -17,7 +17,7 @@ Mapterhorn attribution is included in the generated map.
 
 The workflow is very simple:
 
-1. open **Settings & export** using the gear control on the map
+1. use the gear control on the map to open or close the settings sidebar
 2. select a **line** layer loaded in QGIS and choose a base map
 3. optionally change the appearance or profile settings
 4. the preview updates automatically. Navigate in the map and hover the mouse on the profile to

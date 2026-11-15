@@ -79,6 +79,239 @@
 
 <body>
 
+  <template id="qgis-preview">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { display: flex; font: 14px/1.4 system-ui, sans-serif; color: #172331; background: #e8edf1; }
+    .preview-area { position: relative; flex: 1 1 0; min-width: 0; height: 100%; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; }
+    button, input, select { font: inherit; }
+    button, select, input:not([type="checkbox"]) { border: 1px solid #becbd4; border-radius: 6px; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 3px solid #65aaf4; outline-offset: 2px;
+    }
+    .toggle {
+      position: absolute; top: 12px; right: 12px; z-index: 3;
+      padding: 9px 14px; color: white; background: #173c59;
+      border: 1px solid #173c59; box-shadow: 0 2px 8px #0003;
+    }
+    .panel {
+      flex: 0 0 min(350px, 70vw); height: 100%; min-width: 0;
+      overflow: auto; background: white; border-left: 1px solid #d5dfe6;
+    }
+    .toggle[hidden], .panel[hidden] { display: none; }
+    .panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 16px 18px 10px; }
+    .panel-header h1 { margin: 0; font-size: 17px; }
+    .panel-header p { margin: 3px 0 0; color: #536778; font-size: 12px; }
+    .panel-close { padding: 2px 8px; background: white; color: #536778; font-size: 20px; line-height: 1; }
+    .content { padding: 0 18px 18px; }
+    label.field { display: grid; gap: 5px; margin: 12px 0; font-weight: 600; }
+    select, input[type="text"], input[type="number"] {
+      width: 100%; min-width: 0; min-height: 36px; padding: 6px 8px; background: white; color: #172331;
+    }
+    input[type="color"] { width: 100%; height: 36px; padding: 3px; background: white; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+    .check { display: flex; align-items: center; gap: 8px; margin: 9px 0; }
+    .check input { width: 16px; height: 16px; accent-color: #1b658f; }
+    details { border-top: 1px solid #e3eaf0; padding: 12px 0; }
+    summary { font-weight: 700; cursor: pointer; }
+    .actions { display: grid; gap: 8px; }
+    .actions button { padding: 9px; color: #173c59; background: #f3f7fa; }
+    .actions button.primary { background: #17638b; border-color: #17638b; color: white; }
+    .actions button:disabled { opacity: .5; cursor: not-allowed; }
+    .status { padding: 10px 12px; border-radius: 6px; background: #eaf3f9; color: #31536a; }
+    .status:empty { display: none; }
+    .hint { color: #536778; font-size: 12px; }
+    a { color: #17638b; }
+    .notice {
+      position: absolute; bottom: 12px; left: 12px; z-index: 4;
+      max-width: min(460px, calc(100% - 24px)); padding: 10px 14px;
+      border-radius: 6px; background: #eaf3f9; color: #173c59;
+      box-shadow: 0 2px 8px #0003; overflow-wrap: anywhere;
+    }
+    .notice.error { background: #fff0ef; color: #8a211d; }
+    .notice[hidden] { display: none; }
+  </style>
+  <main class="preview-area">
+    <iframe id="preview" title="Map and elevation profile" src="about:blank"></iframe>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <button id="panel-toggle" class="toggle" type="button" aria-controls="settings-panel" aria-expanded="true">Settings &amp; export</button>
+  </main>
+  <aside id="settings-panel" class="panel" aria-label="Track profile settings">
+    <header class="panel-header">
+      <div>
+        <h1>Track profile</h1>
+        <p>Changes update the preview automatically.</p>
+      </div>
+      <button id="panel-close" class="panel-close" type="button" aria-label="Close settings">&times;</button>
+    </header>
+    <div class="content">
+      <div id="status" class="status" role="status">Connecting to QGIS…</div>
+      <button id="retry" type="button" hidden>Retry preview</button>
+      <label class="field">Line layer <select id="layer" aria-label="Line layer"></select></label>
+      <label class="field">Base map
+        <input id="basemap" type="text" list="basemap-options" placeholder="Choose a map or enter a tile URL">
+        <datalist id="basemap-options"></datalist>
+      </label>
+      <details>
+        <summary>Appearance</summary>
+        <div class="grid">
+          <label class="field">Profile color <input id="profileColor" type="color"></label>
+          <label class="field">Track color <input id="lineColor" type="color"></label>
+          <label class="field">Marker color <input id="markerColor" type="color"></label>
+          <label class="field">Profile width <input id="profileWidth" type="number" min="0" max="10" step="0.5"></label>
+          <label class="field">Marker opacity <input id="markerOpacity" type="number" min="0" max="1" step="0.05"></label>
+        </div>
+      </details>
+      <details>
+        <summary>Profile and map options</summary>
+        <label class="check"><input id="detached" type="checkbox"> Detached profile</label>
+        <label class="field">Profile position
+          <select id="position">
+            <option value="topright">Top right</option><option value="topleft">Top left</option>
+            <option value="bottomright">Bottom right</option><option value="bottomleft">Bottom left</option>
+          </select>
+        </label>
+        <label class="check"><input id="follow" type="checkbox"> Follow track</label>
+        <label class="check"><input id="collapseProfile" type="checkbox"> Collapse profile</label>
+        <label class="check"><input id="autohide" type="checkbox"> Auto-hide profile</label>
+        <label class="check"><input id="collapseLayers" type="checkbox"> Collapse layers</label>
+      </details>
+      <details open>
+        <summary>Export</summary>
+        <p class="hint">The exported page contains the map and profile, without these controls.</p>
+        <div class="actions">
+          <button class="primary" data-action="html" type="button" disabled>Export HTML</button>
+          <button data-action="geojson" type="button" disabled>Export HTML + GeoJSON</button>
+          <button data-action="browser" type="button" disabled>Open in browser</button>
+        </div>
+      </details>
+      <details>
+        <summary>About</summary>
+        <p class="hint">2D lines use elevations from <a href="https://mapterhorn.com/">Mapterhorn</a>. The profile uses <a href="https://github.com/Raruto/leaflet-elevation">leaflet-elevation</a>.</p>
+      </details>
+    </div>
+  </aside>
+  <script>
+    const panel = document.getElementById('settings-panel');
+    const toggle = document.getElementById('panel-toggle');
+    const frame = document.getElementById('preview');
+    const status = document.getElementById('status');
+    const layerSelect = document.getElementById('layer');
+    const basemapOptions = document.getElementById('basemap-options');
+    let bridge;
+    let currentPreview = '';
+    let mapToggle;
+
+    function togglePanel() {
+      panel.hidden = !panel.hidden;
+      toggle.setAttribute('aria-expanded', String(!panel.hidden));
+      if (mapToggle) mapToggle.setAttribute('aria-expanded', String(!panel.hidden));
+    }
+    toggle.addEventListener('click', togglePanel);
+    document.getElementById('panel-close').addEventListener('click', togglePanel);
+
+    frame.addEventListener('load', () => {
+      mapToggle = null;
+      toggle.hidden = false;
+      const mapWindow = frame.contentWindow;
+      if (mapWindow.L && mapWindow.map) {
+        const control = mapWindow.L.control({position: 'topright'});
+        control.onAdd = () => {
+          const container = mapWindow.L.DomUtil.create('div', 'leaflet-bar');
+          mapToggle = mapWindow.L.DomUtil.create('a', '', container);
+          mapToggle.href = '#';
+          mapToggle.title = 'Settings & export';
+          mapToggle.setAttribute('role', 'button');
+          mapToggle.setAttribute('aria-label', 'Settings & export');
+          mapToggle.setAttribute('aria-expanded', String(!panel.hidden));
+          mapToggle.style.fontSize = '20px';
+          mapToggle.textContent = '⚙';
+          mapToggle.addEventListener('click', event => {
+            event.preventDefault();
+            togglePanel();
+          });
+          mapToggle.addEventListener('keydown', event => {
+            if (event.key === ' ') {
+              event.preventDefault();
+              mapToggle.click();
+            }
+          });
+          mapWindow.L.DomEvent.disableClickPropagation(container);
+          return container;
+        };
+        control.addTo(mapWindow.map);
+        toggle.hidden = true;
+      }
+    });
+
+    function showPreview(url) {
+      currentPreview = url;
+      mapToggle = null;
+      toggle.hidden = false;
+      frame.src = url ? url + '?revision=' + Date.now() : 'about:blank';
+    }
+
+    function updateState() {
+      bridge.state((json) => {
+        const state = JSON.parse(json);
+        layerSelect.replaceChildren();
+        if (!state.layers.length) {
+          layerSelect.add(new Option('No line layers available', ''));
+        } else {
+          state.layers.forEach(layer => layerSelect.add(new Option(layer.name, layer.id)));
+          layerSelect.value = state.layer;
+        }
+        layerSelect.disabled = !state.layers.length;
+        basemapOptions.replaceChildren();
+        state.basemaps.forEach(name => basemapOptions.appendChild(new Option(name)));
+        for (const [name, value] of Object.entries(state.settings)) {
+          const input = document.getElementById(name);
+          if (input === document.activeElement) continue;
+          if (input.type === 'checkbox') input.checked = value;
+          else input.value = value;
+        }
+        document.getElementById('position').disabled = state.settings.detached;
+        document.getElementById('autohide').disabled = state.settings.detached;
+        document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready);
+        status.textContent = state.status === 'empty' ? 'Add a line layer to the QGIS project.'
+          : state.status === 'updating' ? 'Updating preview…'
+          : state.status === 'error' ? 'Could not update the preview. See the QGIS message below.' : '';
+        document.getElementById('retry').hidden = state.status !== 'error';
+        const notice = document.getElementById('notice');
+        notice.hidden = !state.message;
+        if (state.message) {
+          notice.textContent = [state.message.title, state.message.text].filter(Boolean).join(' — ');
+          notice.classList.toggle('error', state.message.error);
+        }
+        if (state.preview !== currentPreview) showPreview(state.preview);
+      });
+    }
+
+    new QWebChannel(qt.webChannelTransport, channel => {
+      bridge = channel.objects.bridge;
+      bridge.stateChanged.connect(updateState);
+      bridge.previewChanged.connect(showPreview);
+      document.getElementById('retry').addEventListener('click', () => bridge.retry());
+      layerSelect.addEventListener('change', () => bridge.selectLayer(layerSelect.value));
+      document.querySelectorAll('#settings-panel input, #settings-panel select:not(#layer)').forEach(input => {
+        input.addEventListener('change', () => bridge.setOption(
+          input.id, String(input.type === 'checkbox' ? input.checked : input.value)
+        ));
+      });
+      document.querySelectorAll('[data-action]').forEach(button => {
+        button.addEventListener('click', () => bridge.action(button.dataset.action));
+      });
+      updateState();
+    });
+  </script>
+  </template>
+
   <div id="map"></div>
   <div id="elevation-div" class="leaflet-control elevation"></div>
 

@@ -48,7 +48,7 @@ PY_FILES = \
 
 UI_FILES = track_profile_2_web_dialog_base.ui
 
-EXTRAS = metadata.txt icon.png template.html preview.html
+EXTRAS = metadata.txt icon.png template.html
 
 EXTRA_DIRS =
 

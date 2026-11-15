@@ -121,6 +121,12 @@ def check_html_controls(context):
     assert evaluate("document.querySelector('#preview').src.includes('template.html')"), "preview URL"
     assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
     wait_until("!!document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]')")
+    assert evaluate("""(() => {
+      const frame = document.querySelector('#preview').getBoundingClientRect();
+      const panel = document.querySelector('#settings-panel').getBoundingClientRect();
+      return panel.left === frame.right && panel.right === innerWidth
+        && panel.top === 0 && panel.bottom === innerHeight && frame.width > 0;
+    })()"""), "settings must occupy a separate full-height right sidebar"
     assert evaluate("""
         (() => {
           const doc = document.querySelector('#preview').contentDocument;
@@ -187,12 +193,52 @@ def check_html_controls(context):
       return frame.contentWindow.opts?.elevationControl.options.position === 'bottomleft'
         && !!frame.contentDocument.querySelector('[aria-label="Settings & export"]');
     })()""")
-    assert evaluate("document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]').click(); document.querySelector('#settings-panel').hidden"), "hide panel"
+    narrow_width = evaluate("document.querySelector('#preview').clientWidth")
+    assert evaluate("document.querySelector('#panel-close').click(); document.querySelector('#settings-panel').hidden"), "hide panel"
+    wait_until("""(() => {
+      const frame = document.querySelector('#preview');
+      return frame.clientWidth === innerWidth && frame.contentWindow.map.getSize().x === frame.clientWidth;
+    })()""")
     assert evaluate("""(() => {
       const button = document.querySelector('#preview').contentDocument.querySelector('[aria-label="Settings & export"]');
       button.dispatchEvent(new KeyboardEvent('keydown', {key: ' ', bubbles: true}));
       return !document.querySelector('#settings-panel').hidden;
     })()"""), "show panel with keyboard"
+    wait_until("""(() => {
+      const frame = document.querySelector('#preview');
+      return frame.clientWidth === %d && frame.contentWindow.map.getSize().x === frame.clientWidth;
+    })()""" % narrow_width)
+
+    evaluate("""(() => {
+      const detached = document.querySelector('#detached');
+      detached.checked = true;
+      detached.dispatchEvent(new Event('change'));
+      return true;
+    })()""")
+    wait_until("""(() => {
+      const frame = document.querySelector('#preview');
+      return frame.contentWindow.opts?.elevationControl.options.detached
+        && !!frame.contentDocument.querySelector('#elevation-div svg.background')
+        && !!frame.contentDocument.querySelector('[aria-label="Settings & export"]');
+    })()""")
+    assert evaluate("""(() => {
+      const frame = document.querySelector('#preview');
+      const doc = frame.contentDocument;
+      const chart = doc.querySelector('#elevation-div svg.background').getBoundingClientRect();
+      const summary = doc.querySelector('#data-summary').getBoundingClientRect();
+      return chart.right <= frame.clientWidth && chart.bottom <= summary.top
+        && doc.documentElement.scrollWidth <= doc.documentElement.clientWidth
+        && doc.documentElement.scrollHeight <= doc.documentElement.clientHeight;
+    })()"""), "detached chart must fit beside the sidebar"
+    evaluate("document.querySelector('#panel-close').click(); true")
+    wait_until("""(() => {
+      const frame = document.querySelector('#preview');
+      const chart = frame.contentDocument.querySelector('#elevation-div svg.background');
+      return frame.clientWidth === innerWidth && frame.contentWindow.map.getSize().x === frame.clientWidth
+        && chart.getBoundingClientRect().right <= frame.clientWidth;
+    })()""")
+    evaluate("document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]').click(); true")
+    wait_until("document.querySelector('#preview').clientWidth === %d" % narrow_width)
 
     other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
     feature = QgsFeature(other.fields())
@@ -215,7 +261,7 @@ def check_html_controls(context):
         wait_until("document.querySelector('#layer').value !== ''")
     assert Path(path).exists(), "exported file"
     html = Path(path).read_text(encoding="utf-8")
-    assert "settings-panel" not in html and "#00ff00" in html
+    assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
 
 
 @then("the preview follows option and layer changes without refetching unchanged elevations")
@@ -280,8 +326,19 @@ def check_automatic_preview(context):
         assert drape.call_count == 3
         assert not context.dialog.export_btn.isEnabled()
         assert context.dialog._preview_url == ""
-        assert javascript("!document.querySelector('#retry').hidden"), "retry button"
-        assert javascript("document.querySelector('#notice').textContent.includes('Could not get elevations')"), "error message"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if javascript("""(() => {
+              const retry = document.querySelector('#retry');
+              const notice = document.querySelector('#notice');
+              return retry && !retry.hidden && notice.textContent.includes('Could not get elevations');
+            })()"""):
+                break
+            loop = QEventLoop()
+            QTimer.singleShot(150, loop.quit)
+            loop.exec()
+        else:
+            raise AssertionError("The retry button and error message did not appear")
         from qgis.PyQt.QtGui import QImage
         context.mapterhorn_image = QImage(512, 512, QImage.Format.Format_RGB32)
         context.mapterhorn_image.fill(QColor(128, 100, 0))
@@ -441,6 +498,7 @@ def check_export(context):
     html = (folder / "Test-track.html").read_text(encoding="utf-8")
     data = json.loads((folder / "Test-track.geojson").read_text(encoding="utf-8"))
     assert "Test-track.geojson" in html
+    assert "settings-panel" not in html and "qwebchannel" not in html
     assert data["features"][0]["geometry"]["coordinates"] == COORDINATES
 
 
@@ -503,6 +561,9 @@ def prepare_web_profile(context, separate, detached=True):
         }
     }
     html = (ROOT / "template.html").read_text(encoding="utf-8")
+    before, preview = html.split('<template id="qgis-preview">', 1)
+    _, after = preview.split('</template>', 1)
+    html = before + after
     html = html.replace("'{ py_opts }'", json.dumps(opts))
     for name, value in {
         "area_fill_color": "#d45f5f", "area_stroke_width": "2.5",

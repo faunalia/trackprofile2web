@@ -419,7 +419,12 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         QgsProject.instance().layersAdded.connect(self.bridge.stateChanged)
         QgsProject.instance().layersRemoved.connect(self.bridge.stateChanged)
         self._set_source_layer(self.layer_combo.currentLayer())
-        self.mapview.load(QUrl.fromLocalFile(os.path.join(os.path.dirname(__file__), 'preview.html')))
+        template_path = os.path.join(os.path.dirname(__file__), 'template.html')
+        with open(template_path, encoding='utf-8') as template_file:
+            before, preview = template_file.read().split('<template id="qgis-preview">', 1)
+            preview, after = preview.split('</template>', 1)
+        self.map_template = before + after
+        self.mapview.setHtml('<!DOCTYPE html>\n' + preview, QUrl.fromLocalFile(template_path))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -602,14 +607,10 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 '© Mapterhorn</a>'
             )
 
-        # get the path of the template.html file used to write the final file
-        self.fin = os.path.join(os.path.dirname(__file__), 'template.html')
         # get the path (from tempfolder) where to write the final result
         self.fout = os.path.join(self.preview_dir.name, 'template.html')
 
-        # read the content of the input template.html file
-        with open(self.fin, 'r', encoding='utf-8') as fi:
-            self.lines = fi.readlines()
+        self.lines = self.map_template.splitlines(keepends=True)
 
         for i, j in enumerate(self.lines):
             if '{ py_opts }' in j: # search for '{{ py_opts }}' placeholder
