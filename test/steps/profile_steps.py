@@ -1,7 +1,9 @@
 import json
 import importlib
+import struct
 import threading
 import time
+import zlib
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -169,7 +171,9 @@ def check_html_controls(context):
             ['basemap', 'OpenStreetMap'], ['profileColor', '#00ff00'],
             ['lineColor', '#0033ff'], ['markerColor', '#ff00ff'],
             ['profileWidth', '4'], ['markerOpacity', '0.5'], ['position', 'bottomleft'],
-            ['interpolation', 'curveStep'], ['yAxisMin', '0'], ['yAxisMax', '500']
+            ['interpolation', 'curveStep'], ['yAxisMin', '0'], ['yAxisMax', '500'],
+            ['marker', 'position-marker'], ['dragging', 'disabled'], ['zooming', 'enabled'],
+            ['xTicks', '8'], ['yTicks', '6'], ['decimalsX', '1'], ['decimalsY', '2'], ['zFollow', '14']
           ]) {
             const input = document.getElementById(id);
             input.value = value;
@@ -178,7 +182,8 @@ def check_html_controls(context):
           for (const [id, value] of [
             ['detached', false], ['follow', true], ['collapseProfile', true],
             ['autohide', true], ['collapseLayers', true], ['slope', true],
-            ['imperial', true], ['trackEndpoints', false]
+            ['imperial', true], ['trackEndpoints', false], ['rotateMap', true],
+            ['autohideMarker', false]
           ]) {
             const input = document.getElementById(id);
             input.checked = value;
@@ -200,6 +205,12 @@ def check_html_controls(context):
     assert context.dialog.settings["interpolation"] == "curveStep"
     assert context.dialog.settings["yAxisMin"] == 0
     assert context.dialog.settings["yAxisMax"] == 500
+    assert context.dialog.settings["marker"] == "position-marker"
+    assert context.dialog.settings["dragging"] == "disabled"
+    assert context.dialog.settings["zooming"] == "enabled"
+    assert context.dialog.settings["xTicks"] == 8 and context.dialog.settings["yTicks"] == 6
+    assert context.dialog.settings["decimalsX"] == 1 and context.dialog.settings["decimalsY"] == 2
+    assert context.dialog.settings["zFollow"] == 14 and context.dialog.settings["rotateMap"]
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
       const opts = frame.contentWindow.opts;
@@ -256,6 +267,13 @@ def check_html_controls(context):
     assert context.dialog.layer_combo.currentLayer() == other
     assert json.loads(context.dialog.config["data"])["name"] == "Other track"
 
+    evaluate("""(() => {
+      const input = document.querySelector('#terrain3D');
+      input.checked = true; input.dispatchEvent(new Event('change')); return true;
+    })()""")
+    wait_until("document.querySelector('[data-action=html]').disabled")
+    wait_until("!document.querySelector('[data-action=html]').disabled")
+    assert context.dialog.settings["terrain3D"]
     path = str(Path(context.tempdir.name) / "track.html")
     with patch.object(QFileDialog, "getSaveFileName", return_value=(path, "*.html")):
         evaluate("document.querySelector('[data-action=html]').click(); true")
@@ -264,6 +282,7 @@ def check_html_controls(context):
     html = Path(path).read_text(encoding="utf-8")
     assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
     assert '"slope": true' in html and '"imperial": true' in html
+    assert '"terrain3D": true' in html and '"rotateMap": true' in html
     evaluate("""(() => {
       const input = document.querySelector('#profileWidth');
       input.value = '11'; input.dispatchEvent(new Event('change')); return true;
@@ -611,6 +630,10 @@ def prepare_web_profile(context, separate, detached=True, overrides=None):
             "slope": False, "imperial": False, "distanceMarkers": False, "hotline": False,
             "legend": True, "ruler": True, "trackEndpoints": True, "edgeScale": False,
             "autofitBounds": True, "interpolation": "curveLinear",
+            "rotateMap": False, "terrain3D": False, "autohideMarker": True,
+            "marker": "elevation-line", "dragging": "auto", "zooming": "auto",
+            "xTicks": None, "yTicks": None, "decimalsX": None, "decimalsY": None,
+            "zFollow": None,
             "width": None, "height": None, "xAxisMin": None, "xAxisMax": None,
             "yAxisMin": None, "yAxisMax": None,
         },
@@ -647,7 +670,38 @@ def customized_profile(context):
         "legend": False, "ruler": False, "trackEndpoints": False, "edgeScale": True,
         "autofitBounds": False, "interpolation": "curveStep", "width": 500, "height": 200,
         "xAxisMin": 0, "xAxisMax": 2, "yAxisMin": 0, "yAxisMax": 1000,
+        "rotateMap": True, "autohideMarker": False, "marker": "position-marker",
+        "dragging": "disabled", "zooming": "enabled", "xTicks": 8, "yTicks": 6,
+        "decimalsX": 1, "decimalsY": 2, "zFollow": 14,
     })
+
+
+@given("an elevation profile with 3D terrain")
+def terrain_profile(context):
+    prepare_web_profile(context, False, overrides={
+        "terrain3D": True, "rotateMap": True, "distanceMarkers": True, "hotline": True,
+        "basemapUrl": "https://example.test/tiles/{z}/{x}/{y}.png",
+    })
+    path = Path(context.tempdir.name) / "profile.html"
+    html = path.read_text(encoding="utf-8").replace(
+        "terrainLayer.addTo(map);",
+        "map.on('terrainchange', () => window.terrainChanges = (window.terrainChanges || 0) + 1);"
+        "terrainLayer.addTo(map);",
+    )
+    path.write_text(html, encoding="utf-8")
+    context.terrain_profile = True
+
+
+@given("an elevation profile with 3D terrain but no WebGPU")
+def terrain_without_gpu(context):
+    prepare_web_profile(context, False, overrides={"terrain3D": True, "rotateMap": True})
+    context.no_gpu = True
+
+
+@given("an elevation profile with 3D terrain and unavailable elevation tiles")
+def terrain_with_missing_tiles(context):
+    terrain_profile(context)
+    context.missing_terrain = True
 
 
 @when("I open the profile in a browser")
@@ -661,6 +715,27 @@ def open_profile(context):
     context.playwright = sync_playwright().start()
     context.browser = context.playwright.chromium.launch(channel="chrome", headless=True)
     context.page = context.browser.new_page(ignore_https_errors=True)
+    if getattr(context, "no_gpu", False):
+        context.page.add_init_script("Object.defineProperty(navigator, 'gpu', {value: undefined})")
+    if getattr(context, "terrain_profile", False):
+        def chunk(name, data):
+            payload = name + data
+            return struct.pack(">I", len(data)) + payload + struct.pack(">I", zlib.crc32(payload))
+        pixels = (b"\x00" + b"\x80\x64\x00\xff" * 256 + b"\x81\x64\x00\xff" * 256) * 512
+        image = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 512, 512, 8, 6, 0, 0, 0))
+                 + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b""))
+        context.terrain_requests = []
+        def serve_terrain(route):
+            context.terrain_requests.append(route.request.url)
+            if getattr(context, "missing_terrain", False):
+                route.fulfill(status=500)
+            else:
+                route.fulfill(status=200, content_type="image/png", body=image)
+        context.page.route("https://tiles.mapterhorn.com/**", serve_terrain)
+        context.page.route("https://example.test/tiles/**", lambda route: route.fulfill(
+            status=200, content_type="image/png", body=image,
+            headers={"Access-Control-Allow-Origin": "*"}
+        ))
     context.page.goto("http://127.0.0.1:{}/profile.html".format(context.server.server_port))
 
 
@@ -671,6 +746,8 @@ def check_chart(context):
         timeout=30000
     )
     assert context.page.locator(".custom-theme.elevation-control .area path.altitude").count() > 0
+    assert not context.page.evaluate("""() => performance.getEntriesByType('resource').some(
+      entry => entry.name.includes('leaflet-city-mapper') || entry.name.includes('leaflet-rotate'))""")
     assert context.page.locator(".minele .summaryvalue").inner_text() == "100.00 m"
     assert context.page.locator(".custom-theme.elevation-control .area path.altitude").first.evaluate(
         "element => getComputedStyle(element).fill === 'rgb(0, 255, 0)' && getComputedStyle(element).strokeWidth === '4px'"
@@ -742,6 +819,9 @@ def check_customized_profile(context):
         && o.hotline === 'elevation' && o.edgeScale
         && !o.legend && !o.ruler && !o.trkStart && !o.trkEnd && !o.autofitBounds
         && o.interpolation === 'curveStep' && o.height === 200
+        && !o.autohideMarker && o.marker === 'position-marker' && !o.dragging && o.zooming
+        && o.xTicks === 8 && o.yTicks === 6 && o.decimalsX === 1 && o.decimalsY === 2 && o.zFollow === 14
+        && map.options.rotateControl && map.options.shiftKeyRotate
         && o.xAxisMin === 0 && o.xAxisMax === 2 && o.yAxisMin === 0 && o.yAxisMax === 1000
         && c._chart._scales.distance.domain().join(',') === '0,2'
         && c._chart._scales.altitude.domain().join(',') === '0,1000'
@@ -749,3 +829,54 @@ def check_customized_profile(context):
         && document.querySelector('#elevation-div svg.background').getBoundingClientRect().height === 200
         && getComputedStyle(document.querySelector('.custom-theme.elevation-polyline')).strokeOpacity === '0';
     }""")
+
+
+@then("the map displays 3D terrain and the elevation profile")
+def check_terrain(context):
+    page = context.page
+    if not page.evaluate("async () => !!(await navigator.gpu?.requestAdapter())"):
+        context.scenario.skip("WebGPU is unavailable in this browser")
+        return
+    page.wait_for_selector("canvas.leaflet-3d", timeout=30000)
+    page.wait_for_function("document.querySelector('.maxele .summaryvalue').textContent === '200.00 m'", timeout=30000)
+    page.wait_for_function("!document.querySelector('#map-warning').offsetWidth", timeout=30000)
+    deadline = time.monotonic() + 30
+    while not context.terrain_requests and time.monotonic() < deadline:
+        page.wait_for_timeout(200)
+    assert context.terrain_requests, "the 3D map must request terrain tiles"
+    page.wait_for_function("window.terrainChanges > 1", timeout=30000)
+    page.wait_for_function("""() => controlElevation._hotline.getLayers().length &&
+      controlElevation._layers.getLayers().some(layer => layer instanceof L.Polyline)""", timeout=30000)
+    result = page.evaluate("""async () => {
+      const heights = await terrainTile(10, 500, 300, new AbortController().signal);
+      map.setBearing(30);
+      return {length: heights.length, first: heights[0], last: heights[255],
+        pitch: map.getPitch(), bearing: map.getBearing(), rotation: !!map.options.rotateControl,
+        track: controlElevation._layers.getLayers().some(layer => layer instanceof L.Polyline && map.hasLayer(layer)),
+        rotateScript: performance.getEntriesByType('resource').some(entry => entry.name.includes('leaflet-rotate')),
+        warning: document.querySelector('#map-warning').textContent};
+    }""")
+    assert result == {"length": 65536, "first": 100, "last": 356, "pitch": 45,
+                      "bearing": 30, "rotation": True, "track": True,
+                      "rotateScript": False, "warning": ""}, result
+
+
+@then("the map falls back to 2D with a warning")
+def check_terrain_fallback(context):
+    page = context.page
+    page.wait_for_function("document.querySelector('.maxele .summaryvalue').textContent === '200.00 m'", timeout=30000)
+    assert "3D terrain unavailable" in page.locator("#map-warning").inner_text()
+    assert page.locator("canvas.leaflet-3d").count() == 0
+    assert page.evaluate("""() => map.options.rotateControl
+      && performance.getEntriesByType('resource').some(entry => entry.name.includes('leaflet-rotate'))
+      && !performance.getEntriesByType('resource').some(entry => entry.name.includes('leaflet-city-mapper'))""")
+
+
+@then("the map reports the 3D terrain error")
+def check_terrain_error(context):
+    page = context.page
+    if not page.evaluate("async () => !!(await navigator.gpu?.requestAdapter())"):
+        context.scenario.skip("WebGPU is unavailable in this browser")
+        return
+    page.wait_for_function("document.querySelector('#map-warning').textContent.includes('Mapterhorn: HTTP 500')",
+                           timeout=30000)

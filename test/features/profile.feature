@@ -93,3 +93,21 @@ Feature: Create an elevation profile
     Given an elevation profile with customized chart and track options
     When I open the profile in a browser
     Then the customized options and imperial summary are displayed
+
+  @web
+  Scenario: Render the track on 3D terrain
+    Given an elevation profile with 3D terrain
+    When I open the profile in a browser
+    Then the map displays 3D terrain and the elevation profile
+
+  @web
+  Scenario: Fall back when 3D is unavailable
+    Given an elevation profile with 3D terrain but no WebGPU
+    When I open the profile in a browser
+    Then the map falls back to 2D with a warning
+
+  @web
+  Scenario: Report unavailable 3D elevation tiles
+    Given an elevation profile with 3D terrain and unavailable elevation tiles
+    When I open the profile in a browser
+    Then the map reports the 3D terrain error

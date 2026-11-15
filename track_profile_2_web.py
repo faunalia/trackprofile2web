@@ -245,7 +245,11 @@ class PreviewBridge(QObject):
                 and all(type(settings.get(key)) is bool for key in
                         ("detached", "follow", "collapseProfile", "collapseLayers", "autohide",
                          "slope", "imperial", "distanceMarkers", "hotline", "legend", "ruler",
-                         "trackEndpoints", "edgeScale", "autofitBounds"))
+                         "trackEndpoints", "edgeScale", "autofitBounds", "rotateMap",
+                         "terrain3D", "autohideMarker"))
+                and settings.get("marker") in ("elevation-line", "position-marker")
+                and all(settings.get(key) in ("auto", "enabled", "disabled")
+                        for key in ("dragging", "zooming"))
                 and settings.get("interpolation") in
                     ("curveLinear", "curveStep", "curveStepBefore", "curveStepAfter")
                 and all(type(settings.get(key)) in (int, float) and
@@ -254,6 +258,11 @@ class PreviewBridge(QObject):
                 and all(settings.get(key) is None or
                         (type(settings[key]) is int and 120 <= settings[key] <= maximum)
                         for key, maximum in (("width", 4096), ("height", 1200)))
+                and all(settings.get(key) is None or
+                        (type(settings[key]) is int and minimum <= settings[key] <= maximum)
+                        for key, minimum, maximum in
+                        (("xTicks", 1, 100), ("yTicks", 1, 100), ("decimalsX", 0, 10),
+                         ("decimalsY", 0, 10), ("zFollow", 0, 22)))
                 and all(settings.get(key) is None or
                         (type(settings[key]) in (int, float) and math.isfinite(settings[key])
                          and (not key.startswith("x") or settings[key] >= 0))

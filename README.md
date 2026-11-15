@@ -1,7 +1,8 @@
 # QGIS TrackProfile2Web Plugin
 
 Requires QGIS 4 with Qt WebEngine. The preview and exported pages load
-Leaflet, leaflet-rotate and leaflet-elevation 3.0.1 from a CDN, so they require internet access.
+Leaflet and leaflet-elevation 3.0.1 from a CDN, so they require internet access.
+Map rotation and 3D terrain load additional libraries only when needed.
 When exporting HTML and GeoJSON separately, serve both files over HTTP(S);
 opening the HTML directly as a local file may block the GeoJSON request.
 
@@ -29,9 +30,15 @@ the exported page. The results can be easily embedded in a web page.
 The settings interface, map configuration and styles are defined in
 `track_profile_2_web.html`; `track_profile_2_web.py` handles QGIS integration and exports.
 Chart and track settings include slope, units, distance markers, elevation colors,
-map controls, chart size and axis limits. Limits use the selected units; chart
-size may be reduced to fit the available space. Ascent and descent are calculated
-from the track's elevation samples.
+map rotation, marker behavior, chart interaction, size, ticks and axis limits.
+Limits use the selected units; chart size may be reduced to fit the available
+space. Ascent and descent are calculated from the track's elevation samples.
+
+Optional 3D terrain uses online Mapterhorn elevation tiles and requires WebGPU
+in a secure context, a compatible browser/GPU and a base map allowing CORS.
+If WebGPU is unavailable, the page displays a warning and uses the 2D map.
+Tile loading errors are also displayed. Custom base maps must allow cross-origin
+access; HTTPS pages cannot load HTTP tiles.
 
 [Click to see a live example](https://www.faunalia.eu/it/dev/trackprofile2web).
 

@@ -50,6 +50,12 @@
       font-weight: bold;
     }
 
+    #map-warning {
+      position: absolute; top: 10px; left: 50px; z-index: 10000;
+      max-width: min(460px, calc(100% - 70px)); padding: 8px 12px;
+      background: #fff3cd; color: #664d03; border-radius: 4px;
+    }
+
   </style>
   <style>
    .custom-theme.elevation-control .area path.altitude {
@@ -71,7 +77,6 @@
   <!-- Leaflet (JS/CSS) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
   <!-- leaflet-elevation -->
   <link rel="stylesheet" href="https://unpkg.com/@raruto/leaflet-elevation@3.0.1/dist/leaflet-elevation.min.css" />
   <script src="https://unpkg.com/@raruto/leaflet-elevation@3.0.1/dist/leaflet-elevation.min.js"></script>
@@ -81,6 +86,7 @@
 <body>
 
   <div id="map"></div>
+  <div id="map-warning" role="alert" hidden></div>
   <div id="elevation-div" class="leaflet-control elevation"></div>
 
   <div id="data-summary" class="data-summary"><span class="totlen"><span class="summarylabel">Total Length: </span><span class="summaryvalue">0</span></span> &mdash; <span class="maxele"><span class="summarylabel">Max Elevation: </span><span class="summaryvalue">0</span></span>
@@ -96,7 +102,7 @@
         zoom: 5,
         markerZoomAnimation: false,
         zoomControl: false,
-        rotate: settings.distanceMarkers,
+        rotate: settings.distanceMarkers || settings.rotateMap,
         rotateControl: false,
         touchRotate: false,
         shiftKeyRotate: false
@@ -114,6 +120,8 @@
           elevationDiv: '#elevation-div',
           followMarker: settings.follow,
           autohide: settings.autohide,
+          autohideMarker: settings.autohideMarker,
+          marker: settings.marker,
           slope: settings.slope,
           imperial: settings.imperial,
           hotline: settings.hotline ? 'elevation' : false,
@@ -156,8 +164,12 @@
       elevationOptions.trkStart = false;
       elevationOptions.trkEnd = false;
     }
-    for (const key of ['width', 'height', 'xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']) {
+    for (const key of ['width', 'height', 'xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax',
+                       'xTicks', 'yTicks', 'decimalsX', 'decimalsY', 'zFollow']) {
       if (settings[key] != null) elevationOptions[key] = settings[key];
+    }
+    for (const key of ['dragging', 'zooming']) {
+      if (settings[key] !== 'auto') elevationOptions[key] = settings[key] === 'enabled';
     }
     elevationOptions.forceAxisBounds = ['xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']
       .some(key => settings[key] != null);
@@ -177,13 +189,105 @@
         'Speed', 'Acceleration'];
     }
 
+    function showMapWarning(message) {
+      const notice = document.getElementById('map-warning');
+      notice.textContent = message;
+      notice.hidden = false;
+      console.error(message);
+    }
+
+    function loadMapScript(url) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Could not load ' + url));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function terrainTile(z, x, y, signal) {
+      for (let sourceZoom = Math.min(17, z); sourceZoom >= 0; sourceZoom--) {
+        const factor = 2 ** (z - sourceZoom);
+        const url = `https://tiles.mapterhorn.com/${sourceZoom}/${Math.floor(x / factor)}/${Math.floor(y / factor)}.webp`;
+        const response = await fetch(url, {signal});
+        if (response.status === 404) continue;
+        if (!response.ok) throw new Error(`Mapterhorn: HTTP ${response.status}`);
+        const image = await createImageBitmap(await response.blob());
+        try {
+          if (image.width !== 512 || image.height !== 512) throw new Error('Invalid Mapterhorn tile');
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = 512;
+          const context = canvas.getContext('2d', {willReadFrequently: true});
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(0, 0, 512, 512).data;
+          const heights = new Float32Array(256 * 256);
+          for (let row = 0; row < 256; row++) {
+            for (let column = 0; column < 256; column++) {
+              const px = Math.floor(((x % factor) + (column + 0.5) / 256) * 512 / factor);
+              const py = Math.floor(((y % factor) + (row + 0.5) / 256) * 512 / factor);
+              const index = (py * 512 + px) * 4;
+              if (!pixels[index + 3]) throw new Error('Missing Mapterhorn elevation data');
+              heights[row * 256 + column] = pixels[index] * 256 + pixels[index + 1] + pixels[index + 2] / 256 - 32768;
+            }
+          }
+          return heights;
+        } finally {
+          image.close();
+        }
+      }
+      throw new Error('No Mapterhorn elevation tile available');
+    }
+
+    async function startMap() {
+    let terrain = settings.terrain3D;
+    if (terrain) {
+      try {
+        const adapter = await navigator.gpu?.requestAdapter();
+        if (!adapter) throw new Error('WebGPU is unavailable');
+        const device = await adapter.requestDevice();
+        const context = document.createElement('canvas').getContext('webgpu');
+        if (!context) {
+          device.destroy();
+          throw new Error('WebGPU canvas is unavailable');
+        }
+        device.destroy();
+        await loadMapScript('https://unpkg.com/leaflet-city-mapper@0.1.1/dist/leaflet-city-mapper.js');
+      } catch (error) {
+        showMapWarning('3D terrain unavailable; using 2D map. ' + error.message);
+        terrain = false;
+      }
+    }
+    if (!terrain && (settings.rotateMap || settings.distanceMarkers)) {
+      await loadMapScript('https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js');
+    }
+    opts.map.rotate = terrain || settings.rotateMap || settings.distanceMarkers;
+    opts.map.rotateControl = settings.rotateMap ? {closeOnZeroBearing: false} : false;
+    opts.map.touchRotate = settings.rotateMap;
+    opts.map.shiftKeyRotate = settings.rotateMap;
+    if (terrain) {
+      opts.map.pitch = 45;
+      opts.map.touchPitch = true;
+      opts.otmLayer.options.crossOrigin = true;
+    }
+
     document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
     const map = window.map = new L.Map('map', opts.map);
     map.attributionControl.addAttribution('Powered by <a href="https://github.com/Raruto/leaflet-elevation">Raruto</a>');
 
     const baseLayers = window.baseLayers = {};
     baseLayers.OTM = new L.TileLayer(opts.otmLayer.url, opts.otmLayer.options);
+    if (terrain) baseLayers.OTM.on('tileerror', () =>
+      showMapWarning('3D base map tile failed to load. Check the URL and CORS permissions.'));
 
+    if (terrain) {
+      const terrainLayer = new L.Layer({
+        source: {type: 'terrain', getTile: terrainTile},
+        attribution: 'Elevation: <a href="https://mapterhorn.com/attribution">&copy; Mapterhorn</a>'
+      });
+      terrainLayer.on('error', event => showMapWarning('3D terrain error: ' + event.error.message));
+      terrainLayer.addTo(map);
+    }
     const controlZoom = window.controlZoom = new L.Control.Zoom(opts.zoomControl);
     const controlElevation = window.controlElevation = L.control.elevation(opts.elevationControl.options).addTo(map);
     const controlLayer = window.controlLayer = L.control.layers(baseLayers, null, opts.layersControl.options);
@@ -212,6 +316,8 @@
     });
 
     controlElevation.load(opts.elevationControl.data);
+    }
+    startMap().catch(error => showMapWarning('Could not load the map: ' + error.message));
   </script>
 
   <template id="qgis-preview">
@@ -303,6 +409,9 @@
         <label class="check"><input id="collapseProfile" type="checkbox"> Collapse profile</label>
         <label class="check"><input id="autohide" type="checkbox"> Auto-hide profile</label>
         <label class="check"><input id="collapseLayers" type="checkbox"> Collapse layers</label>
+        <label class="check"><input id="rotateMap" type="checkbox"> Enable map rotation</label>
+        <label class="check"><input id="terrain3D" type="checkbox"> Show 3D terrain</label>
+        <p class="hint">3D terrain requires WebGPU, online elevation tiles and a base map that allows CORS.</p>
       </details>
       <details>
         <summary>Chart and track</summary>
@@ -315,6 +424,16 @@
         <label class="check"><input id="trackEndpoints" type="checkbox" checked> Show start and end markers</label>
         <label class="check"><input id="edgeScale" type="checkbox"> Show map edge scale</label>
         <label class="check"><input id="autofitBounds" type="checkbox" checked> Fit map to track</label>
+        <label class="check"><input id="autohideMarker" type="checkbox" checked> Hide marker when not in use</label>
+        <label class="field">Map marker
+          <select id="marker"><option value="elevation-line">Elevation line</option><option value="position-marker">Position marker</option></select>
+        </label>
+        <label class="field">Chart selection
+          <select id="dragging"><option value="auto">Automatic</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
+        </label>
+        <label class="field">Chart zoom
+          <select id="zooming"><option value="auto">Automatic</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
+        </label>
         <label class="field">Chart interpolation
           <select id="interpolation">
             <option value="curveLinear">Linear</option><option value="curveStep">Step</option>
@@ -328,6 +447,11 @@
           <label class="field">Distance max <input id="xAxisMax" type="number" min="0" step="any" placeholder="Automatic"></label>
           <label class="field">Elevation min <input id="yAxisMin" type="number" step="any" placeholder="Automatic"></label>
           <label class="field">Elevation max <input id="yAxisMax" type="number" step="any" placeholder="Automatic"></label>
+          <label class="field">Distance ticks <input id="xTicks" type="number" min="1" max="100" step="1" placeholder="Automatic"></label>
+          <label class="field">Elevation ticks <input id="yTicks" type="number" min="1" max="100" step="1" placeholder="Automatic"></label>
+          <label class="field">Distance decimals <input id="decimalsX" type="number" min="0" max="10" step="1" placeholder="Automatic"></label>
+          <label class="field">Elevation decimals <input id="decimalsY" type="number" min="0" max="10" step="1" placeholder="Automatic"></label>
+          <label class="field">Follow minimum zoom <input id="zFollow" type="number" min="0" max="22" step="1" placeholder="Automatic"></label>
         </div>
         <p class="hint">Axis limits use the selected units. Chart size is limited by the available space.</p>
       </details>
@@ -366,7 +490,7 @@
       }],
       ['Google', {url: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attribution: ''}],
       ['ESRI Satellite Map', {
-        url: 'http://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         attribution: '&copy; <a href="http://www.esri.com/">Esri</a>'
       }]
     ]);
