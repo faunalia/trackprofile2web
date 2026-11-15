@@ -118,6 +118,11 @@ def check_html_controls(context):
             loop.exec()
         raise AssertionError("HTML interface did not reach expected state: " + script)
 
+    assert evaluate("""(() => {
+      const panel = document.querySelector('#settings-panel');
+      return !panel.hidden && getComputedStyle(panel).display !== 'none'
+        && !document.querySelector('#panel-toggle, #panel-close');
+    })()"""), "settings must be visible without toggle controls at startup"
     context.dialog.show()
     wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=html]')?.disabled")
     assert context.dialog.mapview.width() == context.dialog.width(), "webview width"
@@ -127,7 +132,7 @@ def check_html_controls(context):
     assert evaluate("document.querySelector('#layer').selectedOptions[0].textContent") == "Test track", "layer"
     assert evaluate("document.querySelector('#preview').src.includes('template.html')"), "preview URL"
     assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
-    wait_until("!!document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]')")
+    wait_until("!!document.querySelector('#preview').contentWindow.controlLayer")
     assert evaluate("""(() => {
       const frame = document.querySelector('#preview').getBoundingClientRect();
       const panel = document.querySelector('#settings-panel').getBoundingClientRect();
@@ -137,16 +142,13 @@ def check_html_controls(context):
     assert evaluate("""
         (() => {
           const doc = document.querySelector('#preview').contentDocument;
-          const toggle = doc.querySelector('[aria-label="Settings & export"]');
           const corner = doc.querySelector('.leaflet-top.leaflet-right');
           const panel = document.querySelector('#settings-panel').getBoundingClientRect();
           const controls = [...corner.querySelectorAll('.leaflet-control')];
           const overlaps = (a, b) => a.left < b.right && a.right > b.left
             && a.top < b.bottom && a.bottom > b.top;
-          return controls.some(control => control.contains(toggle))
-            && controls.filter(control => !control.contains(toggle)).every(control =>
-              !overlaps(toggle.getBoundingClientRect(), control.getBoundingClientRect())
-              && !overlaps(panel, control.getBoundingClientRect()))
+          return !doc.querySelector('[aria-label="Settings & export"]')
+            && controls.every(control => !overlaps(panel, control.getBoundingClientRect()))
             && doc.documentElement.scrollHeight <= doc.documentElement.clientHeight
             && document.documentElement.scrollHeight <= document.documentElement.clientHeight;
         })()
@@ -198,23 +200,10 @@ def check_html_controls(context):
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
       return frame.contentWindow.opts?.elevationControl.options.position === 'bottomleft'
-        && !!frame.contentDocument.querySelector('[aria-label="Settings & export"]');
+        && frame.contentWindow.map.getSize().x === frame.clientWidth
+        && !document.querySelector('#settings-panel').hidden
+        && !frame.contentDocument.querySelector('[aria-label="Settings & export"]');
     })()""")
-    narrow_width = evaluate("document.querySelector('#preview').clientWidth")
-    assert evaluate("document.querySelector('#panel-close').click(); document.querySelector('#settings-panel').hidden"), "hide panel"
-    wait_until("""(() => {
-      const frame = document.querySelector('#preview');
-      return frame.clientWidth === innerWidth && frame.contentWindow.map.getSize().x === frame.clientWidth;
-    })()""")
-    assert evaluate("""(() => {
-      const button = document.querySelector('#preview').contentDocument.querySelector('[aria-label="Settings & export"]');
-      button.dispatchEvent(new KeyboardEvent('keydown', {key: ' ', bubbles: true}));
-      return !document.querySelector('#settings-panel').hidden;
-    })()"""), "show panel with keyboard"
-    wait_until("""(() => {
-      const frame = document.querySelector('#preview');
-      return frame.clientWidth === %d && frame.contentWindow.map.getSize().x === frame.clientWidth;
-    })()""" % narrow_width)
 
     evaluate("""(() => {
       const detached = document.querySelector('#detached');
@@ -226,7 +215,8 @@ def check_html_controls(context):
       const frame = document.querySelector('#preview');
       return frame.contentWindow.opts?.elevationControl.options.detached
         && !!frame.contentDocument.querySelector('#elevation-div svg.background')
-        && !!frame.contentDocument.querySelector('[aria-label="Settings & export"]');
+        && !document.querySelector('#settings-panel').hidden
+        && !frame.contentDocument.querySelector('[aria-label="Settings & export"]');
     })()""")
     assert evaluate("""(() => {
       const frame = document.querySelector('#preview');
@@ -237,16 +227,6 @@ def check_html_controls(context):
         && doc.documentElement.scrollWidth <= doc.documentElement.clientWidth
         && doc.documentElement.scrollHeight <= doc.documentElement.clientHeight;
     })()"""), "detached chart must fit beside the sidebar"
-    evaluate("document.querySelector('#panel-close').click(); true")
-    wait_until("""(() => {
-      const frame = document.querySelector('#preview');
-      const chart = frame.contentDocument.querySelector('#elevation-div svg.background');
-      return frame.clientWidth === innerWidth && frame.contentWindow.map.getSize().x === frame.clientWidth
-        && chart.getBoundingClientRect().right <= frame.clientWidth;
-    })()""")
-    evaluate("document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]').click(); true")
-    wait_until("document.querySelector('#preview').clientWidth === %d" % narrow_width)
-
     other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
     feature = QgsFeature(other.fields())
     feature.setGeometry(QgsGeometry.fromWkt("LINESTRING Z (13 46 200, 14 47 300)"))
