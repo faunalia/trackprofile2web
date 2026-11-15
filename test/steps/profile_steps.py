@@ -168,7 +168,8 @@ def check_html_controls(context):
           for (const [id, value] of [
             ['basemap', 'OpenStreetMap'], ['profileColor', '#00ff00'],
             ['lineColor', '#0033ff'], ['markerColor', '#ff00ff'],
-            ['profileWidth', '4'], ['markerOpacity', '0.5'], ['position', 'bottomleft']
+            ['profileWidth', '4'], ['markerOpacity', '0.5'], ['position', 'bottomleft'],
+            ['interpolation', 'curveStep'], ['yAxisMin', '0'], ['yAxisMax', '500']
           ]) {
             const input = document.getElementById(id);
             input.value = value;
@@ -176,7 +177,8 @@ def check_html_controls(context):
           }
           for (const [id, value] of [
             ['detached', false], ['follow', true], ['collapseProfile', true],
-            ['autohide', true], ['collapseLayers', true]
+            ['autohide', true], ['collapseLayers', true], ['slope', true],
+            ['imperial', true], ['trackEndpoints', false]
           ]) {
             const input = document.getElementById(id);
             input.checked = value;
@@ -194,12 +196,20 @@ def check_html_controls(context):
     assert context.dialog.settings["markerColor"] == "#ff00ff"
     assert context.dialog.settings["profileWidth"] == 4
     assert context.dialog.settings["markerOpacity"] == 0.5
+    assert context.dialog.settings["slope"] and context.dialog.settings["imperial"]
+    assert context.dialog.settings["interpolation"] == "curveStep"
+    assert context.dialog.settings["yAxisMin"] == 0
+    assert context.dialog.settings["yAxisMax"] == 500
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
       const opts = frame.contentWindow.opts;
       return opts?.elevationControl.options.position === 'bottomleft'
         && !opts.elevationControl.options.detached && opts.elevationControl.options.followMarker
         && opts.elevationControl.options.autohide && opts.elevationControl.options.collapsed
+        && opts.elevationControl.options.slope && opts.elevationControl.options.imperial
+        && opts.elevationControl.options.interpolation === 'curveStep'
+        && opts.elevationControl.options.yAxisMax === 500
+        && opts.elevationControl.options.trkStart === false
         && opts.layersControl.options.collapsed
         && frame.contentWindow.map.getSize().x === frame.clientWidth
         && !document.querySelector('#settings-panel').hidden
@@ -253,6 +263,7 @@ def check_html_controls(context):
     assert Path(path).exists(), "exported file"
     html = Path(path).read_text(encoding="utf-8")
     assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
+    assert '"slope": true' in html and '"imperial": true' in html
     evaluate("""(() => {
       const input = document.querySelector('#profileWidth');
       input.value = '11'; input.dispatchEvent(new Event('change')); return true;
@@ -264,11 +275,27 @@ def check_html_controls(context):
       input.value = '4'; input.dispatchEvent(new Event('change')); return true;
     })()""")
     wait_until("!document.querySelector('[data-action=html]').disabled")
+    evaluate("""(() => {
+      const input = document.querySelector('#yAxisMax');
+      input.value = '0'; input.dispatchEvent(new Event('change')); return true;
+    })()""")
+    wait_until("document.querySelector('[data-action=html]').disabled")
+    assert context.dialog.settings["yAxisMax"] == 500
+    evaluate("""(() => {
+      const input = document.querySelector('#yAxisMax');
+      input.value = '500'; input.dispatchEvent(new Event('change')); return true;
+    })()""")
+    wait_until("!document.querySelector('[data-action=html]').disabled")
     invalid = dict(context.dialog.settings, profileColor="red; }")
     with patch.object(context.dialog.bar, "pushMessage") as message:
         context.dialog.bridge.setOptions(json.dumps(invalid))
         message.assert_called_once()
     assert context.dialog.settings["profileColor"] == "#00ff00"
+    invalid = dict(context.dialog.settings, yAxisMin=600, yAxisMax=500)
+    with patch.object(context.dialog.bar, "pushMessage") as message:
+        context.dialog.bridge.setOptions(json.dumps(invalid))
+        message.assert_called_once()
+    assert context.dialog.settings["yAxisMax"] == 500
     evaluate("""(() => {
       const input = document.querySelector('#basemap');
       input.value = 'https://example.test/{z}/{x}/{y}.png';
@@ -563,7 +590,7 @@ def check_reprojected_parts(context):
         assert parts[1][0][2] == 300
 
 
-def prepare_web_profile(context, separate, detached=True):
+def prepare_web_profile(context, separate, detached=True, overrides=None):
     data = {
         "type": "FeatureCollection",
         "name": "Test track",
@@ -580,9 +607,16 @@ def prepare_web_profile(context, separate, detached=True):
             "position": "topright", "detached": detached, "follow": False,
             "autohide": False, "collapseProfile": False, "collapseLayers": True,
             "profileColor": "#00ff00", "profileWidth": 4,
-            "markerColor": "#ff00ff", "lineColor": "#0033ff", "markerOpacity": 0.5
+            "markerColor": "#ff00ff", "lineColor": "#0033ff", "markerOpacity": 0.5,
+            "slope": False, "imperial": False, "distanceMarkers": False, "hotline": False,
+            "legend": True, "ruler": True, "trackEndpoints": True, "edgeScale": False,
+            "autofitBounds": True, "interpolation": "curveLinear",
+            "width": None, "height": None, "xAxisMin": None, "xAxisMax": None,
+            "yAxisMin": None, "yAxisMax": None,
         },
     }
+    if overrides:
+        config["settings"].update(overrides)
     html = (ROOT / "track_profile_2_web.html").read_text(encoding="utf-8")
     before, preview = html.split('<template id="qgis-preview">', 1)
     _, after = preview.split('</template>', 1)
@@ -604,6 +638,16 @@ def separate_profile(context):
 @given("an attached elevation profile in the HTML template")
 def attached_profile(context):
     prepare_web_profile(context, False, detached=False)
+
+
+@given("an elevation profile with customized chart and track options")
+def customized_profile(context):
+    prepare_web_profile(context, False, overrides={
+        "slope": True, "imperial": True, "distanceMarkers": True, "hotline": True,
+        "legend": False, "ruler": False, "trackEndpoints": False, "edgeScale": True,
+        "autofitBounds": False, "interpolation": "curveStep", "width": 500, "height": 200,
+        "xAxisMin": 0, "xAxisMax": 2, "yAxisMin": 0, "yAxisMax": 1000,
+    })
 
 
 @when("I open the profile in a browser")
@@ -667,3 +711,41 @@ def check_attached(context):
     assert context.page.locator("#map").evaluate(
         "element => element.getBoundingClientRect().height === window.innerHeight"
     )
+
+
+@then("the customized options and imperial summary are displayed")
+def check_customized_profile(context):
+    page = context.page
+    page.wait_for_function("document.querySelector('.maxele .summaryvalue').textContent.endsWith(' ft')", timeout=30000)
+    page.wait_for_function("""() => map.edgeScaleControl && controlElevation._hotline.getLayers().length
+      && document.querySelector('.custom-theme.elevation-polyline')""", timeout=30000)
+    page.evaluate("() => map.setView([45.005, 12.005], 13)")
+    page.wait_for_function("""() => {
+      const line = controlElevation._layers.getLayers().find(layer => layer instanceof L.Polyline);
+      return line && line._distanceMarkers && line._distanceMarkers.getLayers().length;
+    }""", timeout=30000)
+    assert page.locator(".maxele .summaryvalue").inner_text() == "656.17 ft"
+    assert page.locator(".minele .summaryvalue").inner_text() == "328.08 ft"
+    assert page.locator(".totlen .summaryvalue").inner_text().endswith(" mi")
+    assert page.locator(".ascent .summaryvalue").inner_text() == "328.08 ft"
+    assert page.locator(".descent .summaryvalue").inner_text() == "0.00 ft"
+    assert page.locator(".area path.slope").count() > 0
+    assert page.evaluate("""() => {
+      const c = controlElevation, o = c.options, point = c._data[1];
+      const meters = c._data[0].latlng.distanceTo(point.latlng);
+      const line = c._layers.getLayers().find(layer => layer instanceof L.Polyline);
+      const arrow = line._distanceMarkers.getLayers().flatMap(group => group.getLayers())
+        .find(marker => marker.options.rotation);
+      return Math.abs(point.slope - 10000 / meters) < 0.05
+        && o.distanceMarkers.offset === 804.672 && o.distanceMarkers.textFunction(1609.344) === '1'
+        && arrow && arrow._icon.style.transform.includes('rotate')
+        && o.hotline === 'elevation' && o.edgeScale
+        && !o.legend && !o.ruler && !o.trkStart && !o.trkEnd && !o.autofitBounds
+        && o.interpolation === 'curveStep' && o.height === 200
+        && o.xAxisMin === 0 && o.xAxisMax === 2 && o.yAxisMin === 0 && o.yAxisMax === 1000
+        && c._chart._scales.distance.domain().join(',') === '0,2'
+        && c._chart._scales.altitude.domain().join(',') === '0,1000'
+        && document.querySelector('#elevation-div').getBoundingClientRect().width === 500
+        && document.querySelector('#elevation-div svg.background').getBoundingClientRect().height === 200
+        && getComputedStyle(document.querySelector('.custom-theme.elevation-polyline')).strokeOpacity === '0';
+    }""")

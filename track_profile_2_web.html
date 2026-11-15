@@ -71,6 +71,7 @@
   <!-- Leaflet (JS/CSS) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
   <!-- leaflet-elevation -->
   <link rel="stylesheet" href="https://unpkg.com/@raruto/leaflet-elevation@3.0.1/dist/leaflet-elevation.min.css" />
   <script src="https://unpkg.com/@raruto/leaflet-elevation@3.0.1/dist/leaflet-elevation.min.js"></script>
@@ -83,14 +84,26 @@
   <div id="elevation-div" class="leaflet-control elevation"></div>
 
   <div id="data-summary" class="data-summary"><span class="totlen"><span class="summarylabel">Total Length: </span><span class="summaryvalue">0</span></span> &mdash; <span class="maxele"><span class="summarylabel">Max Elevation: </span><span class="summaryvalue">0</span></span>
-    &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span></div>
+    &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span><span id="slope-summary" hidden>
+    &mdash; <span class="ascent">Ascent: <span class="summaryvalue">0</span></span> &mdash; <span class="descent">Descent: <span class="summaryvalue">0</span></span></span></div>
 
   <script>
-    var config = '{ py_opts }';
-    var settings = config.settings;
-    var opts = {
-      map: {center: [41.4583, 12.7059], zoom: 5, markerZoomAnimation: false, zoomControl: false},
-      zoomControl: {position: 'topleft'},
+    const config = window.config = '{ py_opts }';
+    const settings = window.settings = config.settings;
+    const opts = window.opts = {
+      map: {
+        center: [41.4583, 12.7059],
+        zoom: 5,
+        markerZoomAnimation: false,
+        zoomControl: false,
+        rotate: settings.distanceMarkers,
+        rotateControl: false,
+        touchRotate: false,
+        shiftKeyRotate: false
+      },
+      zoomControl: {
+        position: 'topleft'
+      },
       elevationControl: {
         data: config.data,
         options: {
@@ -101,32 +114,79 @@
           elevationDiv: '#elevation-div',
           followMarker: settings.follow,
           autohide: settings.autohide,
-          hotline: false,
-          distanceMarkers: false,
-          edgeScale: false,
+          slope: settings.slope,
+          imperial: settings.imperial,
+          hotline: settings.hotline ? 'elevation' : false,
+          distanceMarkers: settings.distanceMarkers,
+          edgeScale: settings.edgeScale,
+          legend: settings.legend,
+          ruler: settings.ruler,
+          autofitBounds: settings.autofitBounds,
+          interpolation: settings.interpolation,
           summary: false,
           downloadLink: false
         }
       },
-      layersControl: {options: {collapsed: settings.collapseLayers}},
-      otmLayer: {url: settings.basemapUrl, options: {attribution: settings.basemapAttribution}}
+      layersControl: {
+        options: {
+          collapsed: settings.collapseLayers
+        }
+      },
+      otmLayer: {
+        url: settings.basemapUrl,
+        options: {
+          attribution: settings.basemapAttribution
+        }
+      }
     };
     document.documentElement.style.setProperty('--profile-color', settings.profileColor);
     document.documentElement.style.setProperty('--profile-width', settings.profileWidth);
     document.documentElement.style.setProperty('--marker-color', settings.markerColor);
     document.documentElement.style.setProperty('--line-color', settings.lineColor);
-    document.documentElement.style.setProperty('--line-opacity', settings.markerOpacity);
+    document.documentElement.style.setProperty('--line-opacity', settings.hotline ? 0 : settings.markerOpacity);
+
+    const elevationOptions = window.elevationOptions = opts.elevationControl.options;
+    if (settings.distanceMarkers && settings.imperial) {
+      elevationOptions.distanceMarkers = {
+        lazy: true, distance: true, direction: true, offset: 804.672,
+        textFunction: distance => (distance / 1609.344).toFixed(0)
+      };
+    }
+    if (!settings.trackEndpoints) {
+      elevationOptions.trkStart = false;
+      elevationOptions.trkEnd = false;
+    }
+    for (const key of ['width', 'height', 'xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']) {
+      if (settings[key] != null) elevationOptions[key] = settings[key];
+    }
+    elevationOptions.forceAxisBounds = ['xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']
+      .some(key => settings[key] != null);
+    if (settings.detached && settings.width != null) {
+      document.getElementById('elevation-div').style.width = `min(100%, ${settings.width}px)`;
+    }
+    if (settings.slope && settings.imperial) {
+      // leaflet-elevation 3.0.1 computes slope from feet and miles without converting units.
+      elevationOptions.handlers = ['Distance', 'Time', 'Altitude',
+        import('https://unpkg.com/@raruto/leaflet-elevation@3.0.1/src/handlers/slope.js')
+          .then(({Slope}) => ({SlopeInImperial: function() {
+            const handler = Slope.call(this);
+            const calculate = handler.pointToAttr;
+            handler.pointToAttr = (...args) => calculate(...args) * 0.621371 / 3.28084;
+            return handler;
+          }})),
+        'Speed', 'Acceleration'];
+    }
 
     document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
-    var map = new L.Map('map', opts.map);
+    const map = window.map = new L.Map('map', opts.map);
     map.attributionControl.addAttribution('Powered by <a href="https://github.com/Raruto/leaflet-elevation">Raruto</a>');
 
-    var baseLayers = {};
+    const baseLayers = window.baseLayers = {};
     baseLayers.OTM = new L.TileLayer(opts.otmLayer.url, opts.otmLayer.options);
 
-    var controlZoom = new L.Control.Zoom(opts.zoomControl);
-    var controlElevation = L.control.elevation(opts.elevationControl.options).addTo(map);
-    var controlLayer = L.control.layers(baseLayers, null, opts.layersControl.options);
+    const controlZoom = window.controlZoom = new L.Control.Zoom(opts.zoomControl);
+    const controlElevation = window.controlElevation = L.control.elevation(opts.elevationControl.options).addTo(map);
+    const controlLayer = window.controlLayer = L.control.layers(baseLayers, null, opts.layersControl.options);
 
     controlZoom.addTo(map);
     controlLayer.addTo(map);
@@ -134,14 +194,21 @@
     map.addLayer(baseLayers.OTM);
 
     controlElevation.on('eledata_loaded', function(e) {
-      var q = document.querySelector.bind(document);
-      var track = e.track_info;
+      const q = document.querySelector.bind(document);
+      const track = e.track_info;
 
       controlLayer.addOverlay(e.layer, e.name);
 
-      q('.totlen .summaryvalue').innerHTML = track.distance.toFixed(2) + " km";
-      q('.maxele .summaryvalue').innerHTML = track.elevation_max.toFixed(2) + " m";
-      q('.minele .summaryvalue').innerHTML = track.elevation_min.toFixed(2) + " m";
+      const distanceUnit = settings.imperial ? ' mi' : ' km';
+      const heightUnit = settings.imperial ? ' ft' : ' m';
+      q('.totlen .summaryvalue').textContent = track.distance.toFixed(2) + distanceUnit;
+      q('.maxele .summaryvalue').textContent = track.elevation_max.toFixed(2) + heightUnit;
+      q('.minele .summaryvalue').textContent = track.elevation_min.toFixed(2) + heightUnit;
+      if (settings.slope) {
+        q('#slope-summary').hidden = false;
+        q('.ascent .summaryvalue').textContent = (track.ascent || 0).toFixed(2) + heightUnit;
+        q('.descent .summaryvalue').textContent = (track.descent || 0).toFixed(2) + heightUnit;
+      }
     });
 
     controlElevation.load(opts.elevationControl.data);
@@ -237,6 +304,33 @@
         <label class="check"><input id="autohide" type="checkbox"> Auto-hide profile</label>
         <label class="check"><input id="collapseLayers" type="checkbox"> Collapse layers</label>
       </details>
+      <details>
+        <summary>Chart and track</summary>
+        <label class="check"><input id="slope" type="checkbox"> Show slope and ascent/descent</label>
+        <label class="check"><input id="imperial" type="checkbox"> Use miles and feet</label>
+        <label class="check"><input id="distanceMarkers" type="checkbox"> Distance and direction markers</label>
+        <label class="check"><input id="hotline" type="checkbox"> Color track by elevation</label>
+        <label class="check"><input id="legend" type="checkbox" checked> Show legend</label>
+        <label class="check"><input id="ruler" type="checkbox" checked> Show chart ruler</label>
+        <label class="check"><input id="trackEndpoints" type="checkbox" checked> Show start and end markers</label>
+        <label class="check"><input id="edgeScale" type="checkbox"> Show map edge scale</label>
+        <label class="check"><input id="autofitBounds" type="checkbox" checked> Fit map to track</label>
+        <label class="field">Chart interpolation
+          <select id="interpolation">
+            <option value="curveLinear">Linear</option><option value="curveStep">Step</option>
+            <option value="curveStepBefore">Step before</option><option value="curveStepAfter">Step after</option>
+          </select>
+        </label>
+        <div class="grid">
+          <label class="field">Chart width (px) <input id="width" type="number" min="120" max="4096" step="1" placeholder="Automatic"></label>
+          <label class="field">Chart height (px) <input id="height" type="number" min="120" max="1200" step="1" placeholder="Automatic"></label>
+          <label class="field">Distance min <input id="xAxisMin" type="number" min="0" step="any" placeholder="Automatic"></label>
+          <label class="field">Distance max <input id="xAxisMax" type="number" min="0" step="any" placeholder="Automatic"></label>
+          <label class="field">Elevation min <input id="yAxisMin" type="number" step="any" placeholder="Automatic"></label>
+          <label class="field">Elevation max <input id="yAxisMax" type="number" step="any" placeholder="Automatic"></label>
+        </div>
+        <p class="hint">Axis limits use the selected units. Chart size is limited by the available space.</p>
+      </details>
       <details open>
         <summary>Export</summary>
         <p class="hint">The exported page contains the map and profile, without these controls.</p>
@@ -256,7 +350,7 @@
     const status = document.getElementById('status');
     const layerSelect = document.getElementById('layer');
     const basemapOptions = document.getElementById('basemap-options');
-    const settings = [...document.querySelectorAll('#settings-panel input, #settings-panel select:not(#layer)')];
+    const settingInputs = [...document.querySelectorAll('#settings-panel input, #settings-panel select:not(#layer)')];
     const basemaps = new Map([
       ['OpenTopoMap', {
         url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -296,7 +390,7 @@
           layerSelect.value = state.layer;
         }
         layerSelect.disabled = !state.layers.length;
-        const valid = settings.every(input => input.checkValidity());
+        const valid = settingInputs.every(input => input.checkValidity());
         document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready || !valid);
         status.textContent = !valid ? 'Please correct the settings.'
           : state.status === 'empty' ? 'Add a line layer to the QGIS project.'
@@ -317,10 +411,16 @@
       const detached = document.getElementById('detached').checked;
       document.getElementById('position').disabled = detached;
       document.getElementById('autohide').disabled = detached;
-      if (settings.every(input => input.checkValidity())) {
-        const values = Object.fromEntries(settings.map(input => [
+      for (const axis of ['x', 'y']) {
+        const min = document.getElementById(axis + 'AxisMin');
+        const max = document.getElementById(axis + 'AxisMax');
+        max.setCustomValidity(min.value && max.value && min.valueAsNumber >= max.valueAsNumber
+          ? 'Maximum must be greater than minimum.' : '');
+      }
+      if (settingInputs.every(input => input.checkValidity())) {
+        const values = Object.fromEntries(settingInputs.map(input => [
           input.id, input.type === 'checkbox' ? input.checked
-            : input.type === 'number' ? input.valueAsNumber : input.value
+            : input.type === 'number' ? (input.value === '' ? null : input.valueAsNumber) : input.value
         ]));
         const basemap = basemaps.get(values.basemap) || {url: values.basemap, attribution: ''};
         values.basemapUrl = basemap.url;
@@ -336,7 +436,7 @@
       bridge.previewChanged.connect(showPreview);
       document.getElementById('retry').addEventListener('click', () => bridge.retry());
       layerSelect.addEventListener('change', () => bridge.selectLayer(layerSelect.value));
-      settings.forEach(input => input.addEventListener('change', updateSettings));
+      settingInputs.forEach(input => input.addEventListener('change', updateSettings));
       document.querySelectorAll('[data-action]').forEach(button => {
         button.addEventListener('click', () => bridge.action(button.dataset.action));
       });

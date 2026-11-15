@@ -243,10 +243,25 @@ class PreviewBridge(QObject):
                         re.fullmatch(r"#[0-9a-fA-F]{6}", settings[key])
                         for key in ("profileColor", "lineColor", "markerColor"))
                 and all(type(settings.get(key)) is bool for key in
-                        ("detached", "follow", "collapseProfile", "collapseLayers", "autohide"))
+                        ("detached", "follow", "collapseProfile", "collapseLayers", "autohide",
+                         "slope", "imperial", "distanceMarkers", "hotline", "legend", "ruler",
+                         "trackEndpoints", "edgeScale", "autofitBounds"))
+                and settings.get("interpolation") in
+                    ("curveLinear", "curveStep", "curveStepBefore", "curveStepAfter")
                 and all(type(settings.get(key)) in (int, float) and
                         math.isfinite(settings[key]) and 0 <= settings[key] <= maximum
                         for key, maximum in (("profileWidth", 10), ("markerOpacity", 1)))
+                and all(settings.get(key) is None or
+                        (type(settings[key]) is int and 120 <= settings[key] <= maximum)
+                        for key, maximum in (("width", 4096), ("height", 1200)))
+                and all(settings.get(key) is None or
+                        (type(settings[key]) in (int, float) and math.isfinite(settings[key])
+                         and (not key.startswith("x") or settings[key] >= 0))
+                        for key in ("xAxisMin", "xAxisMax", "yAxisMin", "yAxisMax"))
+                and all(settings.get(axis + "AxisMin") is None or
+                        settings.get(axis + "AxisMax") is None or
+                        settings[axis + "AxisMin"] < settings[axis + "AxisMax"]
+                        for axis in ("x", "y"))
             )
         except (ValueError, TypeError, OverflowError):
             valid = False

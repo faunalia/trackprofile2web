@@ -87,3 +87,9 @@ Feature: Create an elevation profile
     When I open the profile in a browser
     Then the chart and its elevation summary are displayed
     And the profile is attached to the map
+
+  @web
+  Scenario: Render customized chart and track options
+    Given an elevation profile with customized chart and track options
+    When I open the profile in a browser
+    Then the customized options and imperial summary are displayed
