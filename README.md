@@ -58,11 +58,12 @@ Run packaging and upload scenarios without QGIS or browser dependencies:
 python -m behave test\features --tags=@unit
 ```
 
-The Makefile packaging and upload scenarios require a Unix shell.
+## Releases
 
-## Packaging
+Configure the GitHub Actions secrets `QGIS_USERNAME` and `QGIS_PASSWORD` with
+an OSGeo account permitted to upload the plugin. Push a new version tag
+matching `metadata.txt` (for example `1.4` or `v1.4` for version `1.4`).
 
-On Unix, `make zip` builds the plugin ZIP without installing it. `make upload`
-builds the ZIP and uploads it to the QGIS plugin repository, prompting for an
-OSGeo username and password. Upload an existing
-`track_profile_2_web.zip` with `make upload-existing`.
+The CD workflow runs the CI tests, creates the plugin ZIP, and publishes it
+to the QGIS plugin repository before creating a GitHub Release. If publishing
+fails, rerun the failed jobs from GitHub Actions.

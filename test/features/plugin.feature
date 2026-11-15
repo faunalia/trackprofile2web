@@ -40,8 +40,13 @@ Feature: Plugin and QGIS requirements
 
   @unit
   Scenario: Report a missing plugin package
-    When I upload a missing package with Make
+    When I upload a missing package
     Then the upload command reports failure
+
+  @unit
+  Scenario: Require repository credentials
+    When I upload without repository credentials
+    Then the upload reports missing credentials
 
   @unit
   Scenario: Reject insecure remote uploads
@@ -49,8 +54,19 @@ Feature: Plugin and QGIS requirements
     Then the upload rejects the URL before requesting credentials
 
   @unit
-  Scenario: Package the plugin
+  Scenario Outline: Package the plugin with a version tag
     Given a plugin ready for packaging
-    When I build the plugin package
+    When I build the plugin package with a <tag_style> tag
     Then the ZIP contains only the plugin files
     And the deployed plugin is unchanged
+
+    Examples:
+      | tag_style |
+      | plain     |
+      | prefixed  |
+
+  @unit
+  Scenario: Reject a release tag that does not match the plugin version
+    Given a plugin ready for packaging
+    When I build the package with a different version tag
+    Then package creation fails

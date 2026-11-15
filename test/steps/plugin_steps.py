@@ -1,10 +1,10 @@
 import base64
 import configparser
 import os
-import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import zipfile
 from pathlib import Path
@@ -16,6 +16,13 @@ from behave import given, then, when
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def cd_script(step):
+    workflow = (ROOT / ".github" / "workflows" / "cd.yml").read_text(encoding="utf-8")
+    block = workflow.split(f"      - name: {step}\n", 1)[1]
+    script = block.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    return textwrap.dedent(script)
 
 
 @given("the plugin metadata")
@@ -72,11 +79,7 @@ class AuthenticatedHandler(SimpleXMLRPCRequestHandler):
 
 @given("a plugin package and a local repository")
 def local_repository(context):
-    if os.name != "posix":
-        context.scenario.skip("Makefile upload requires a Unix shell")
-        return
     context.package_dir = Path(context.tempdir.name)
-    shutil.copy(ROOT / "Makefile", context.package_dir / "Makefile")
     context.package = context.package_dir / "track_profile_2_web.zip"
     context.package.write_bytes(b"test zip")
     username, password = "user@example.test", "p@ss:word"
@@ -99,10 +102,11 @@ def local_repository(context):
 
 def upload_package(context):
     url = f"http://127.0.0.1:{context.options.port}/plugins/RPC2/"
+    env = dict(os.environ, QGIS_UPLOAD_URL=url, QGIS_USERNAME=context.options.username,
+               QGIS_PASSWORD=context.options.password)
     context.result = subprocess.run(
-        ["make", "-o", "zip", "upload", f"UPLOAD_URL={url}", f"PYTHON={shlex.quote(sys.executable)}"],
-        cwd=context.package_dir, input=f"{context.options.username}\n{context.options.password}\n",
-        capture_output=True, text=True, start_new_session=True, timeout=30
+        [sys.executable, "-c", cd_script("Upload to QGIS")], cwd=context.package_dir,
+        env=env, capture_output=True, text=True, timeout=30
     )
 
 
@@ -150,17 +154,14 @@ def check_rejection(context):
     assert "Plugin rejected" in context.result.stderr
 
 
-@when("I upload a missing package with Make")
+@when("I upload a missing package")
 def upload_missing_package(context):
-    if os.name != "posix":
-        context.scenario.skip("Makefile upload requires a Unix shell")
-        return
     package_dir = Path(context.tempdir.name)
-    shutil.copy(ROOT / "Makefile", package_dir / "Makefile")
+    env = dict(os.environ, QGIS_UPLOAD_URL="https://plugins.qgis.org/plugins/RPC2/",
+               QGIS_USERNAME="user", QGIS_PASSWORD="password")
     context.result = subprocess.run(
-        ["make", "upload-existing", f"PYTHON={shlex.quote(sys.executable)}"],
-        cwd=package_dir, input="user\npassword\n", capture_output=True, text=True,
-        start_new_session=True, timeout=30
+        [sys.executable, "-c", cd_script("Upload to QGIS")], cwd=package_dir,
+        env=env, capture_output=True, text=True, timeout=30
     )
 
 
@@ -170,18 +171,29 @@ def check_missing_package(context):
     assert "Upload failed" in context.result.stderr
 
 
+@when("I upload without repository credentials")
+def upload_without_credentials(context):
+    env = dict(os.environ, QGIS_UPLOAD_URL="https://plugins.qgis.org/plugins/RPC2/",
+               QGIS_USERNAME="", QGIS_PASSWORD="")
+    context.result = subprocess.run(
+        [sys.executable, "-c", cd_script("Upload to QGIS")], cwd=context.tempdir.name,
+        env=env, capture_output=True, text=True, timeout=30
+    )
+
+
+@then("the upload reports missing credentials")
+def check_missing_credentials(context):
+    assert context.result.returncode != 0
+    assert "QGIS_USERNAME and QGIS_PASSWORD" in context.result.stderr
+
+
 @when("I configure an insecure remote upload URL")
 def insecure_upload_url(context):
-    if os.name != "posix":
-        context.scenario.skip("Makefile upload requires a Unix shell")
-        return
-    package_dir = Path(context.tempdir.name)
-    shutil.copy(ROOT / "Makefile", package_dir / "Makefile")
+    env = dict(os.environ, QGIS_UPLOAD_URL="http://example.test/plugins/RPC2/",
+               QGIS_USERNAME="user", QGIS_PASSWORD="password")
     context.result = subprocess.run(
-        ["make", "upload-existing", "UPLOAD_URL=http://example.test/plugins/RPC2/",
-         f"PYTHON={shlex.quote(sys.executable)}"],
-        cwd=package_dir, input="user\npassword\n", capture_output=True, text=True,
-        start_new_session=True, timeout=30
+        [sys.executable, "-c", cd_script("Upload to QGIS")], cwd=context.tempdir.name,
+        env=env, capture_output=True, text=True, timeout=30
     )
 
 
@@ -189,16 +201,13 @@ def insecure_upload_url(context):
 def check_insecure_upload_url(context):
     assert context.result.returncode != 0
     assert "Upload requires HTTPS" in context.result.stderr
-    assert "Please enter user name" not in context.result.stdout
+    assert "password" not in context.result.stdout + context.result.stderr
 
 
 @given("a plugin ready for packaging")
 def prepare_package(context):
-    if os.name != "posix":
-        context.scenario.skip("Makefile packaging requires a Unix shell")
-        return
     context.package_dir = Path(context.tempdir.name)
-    for name in ("Makefile", "__init__.py", "track_profile_2_web.py",
+    for name in ("__init__.py", "track_profile_2_web.py",
                  "metadata.txt", "icon.png", "track_profile_2_web.html", "LICENSE"):
         shutil.copy(ROOT / name, context.package_dir / name)
     deployed = context.package_dir / "deploy" / "track_profile_2_web"
@@ -209,12 +218,18 @@ def prepare_package(context):
     (i18n / "unused.qm").write_text("unused")
 
 
-@when("I build the plugin package")
-def build_package(context):
-    subprocess.run(
-        ["make", "zip", "QGISDIR=deploy", f"PYTHON={shlex.quote(sys.executable)}"],
-        cwd=context.package_dir, check=True
+@when("I build the plugin package with a {tag_style} tag")
+def build_package(context, tag_style):
+    metadata = configparser.ConfigParser()
+    metadata.read(context.package_dir / "metadata.txt", encoding="utf-8")
+    assert tag_style in ("plain", "prefixed")
+    prefix = "v" if tag_style == "prefixed" else ""
+    env = dict(os.environ, GITHUB_REF_NAME=prefix + metadata.get("general", "version"))
+    context.result = subprocess.run(
+        [sys.executable, "-c", cd_script("Build plugin ZIP")], cwd=context.package_dir,
+        env=env, capture_output=True, text=True, timeout=30
     )
+    assert context.result.returncode == 0, context.result.stderr
 
 
 @then("the ZIP contains only the plugin files")
@@ -223,6 +238,8 @@ def check_package(context):
              "icon.png", "track_profile_2_web.html", "LICENSE")
     with zipfile.ZipFile(context.package_dir / "track_profile_2_web.zip") as archive:
         assert set(archive.namelist()) == {f"track_profile_2_web/{name}" for name in files}
+        for name in files:
+            assert archive.read(f"track_profile_2_web/{name}") == (ROOT / name).read_bytes()
         assert archive.testzip() is None
 
 
@@ -231,3 +248,19 @@ def check_deployed_plugin(context):
     deployed = context.package_dir / "deploy" / "track_profile_2_web"
     assert [path.name for path in deployed.iterdir()] == ["stale.txt"]
     assert (deployed / "stale.txt").read_text() == "unchanged"
+
+
+@when("I build the package with a different version tag")
+def build_package_with_wrong_tag(context):
+    env = dict(os.environ, GITHUB_REF_NAME="v99999")
+    context.result = subprocess.run(
+        [sys.executable, "-c", cd_script("Build plugin ZIP")], cwd=context.package_dir,
+        env=env, capture_output=True, text=True, timeout=30
+    )
+
+
+@then("package creation fails")
+def check_package_failure(context):
+    assert context.result.returncode != 0
+    assert "Tag does not match" in context.result.stderr
+    assert not (context.package_dir / "track_profile_2_web.zip").exists()
