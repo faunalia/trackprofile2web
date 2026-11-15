@@ -18,7 +18,7 @@ def create_layer(context, geometry_type, crs, wkt):
     from support.hooks import qgis_app
     qgis_app()
     TrackProfile2webDialog = importlib.import_module(
-        ROOT.name + ".track_profile_2_web_dialog"
+        ROOT.name + ".track_profile_2_web"
     ).TrackProfile2webDialog
 
     context.layer = QgsVectorLayer(
@@ -66,7 +66,7 @@ def update_preview(context):
         context.dialog.changeMap()
         return
 
-    module = importlib.import_module(ROOT.name + ".track_profile_2_web_dialog")
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web")
     image = context.mapterhorn_image
     with patch.object(
         module,
@@ -298,7 +298,7 @@ def check_automatic_preview(context):
         assert result, "The HTML interface did not respond"
         return result[0]
 
-    module = importlib.import_module(ROOT.name + ".track_profile_2_web_dialog")
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web")
     with patch.object(
         module, "_fetch_mapterhorn_tile",
         side_effect=lambda zoom, x, y: context.mapterhorn_image if zoom == 13 else None
@@ -432,14 +432,15 @@ def check_maximized_dialog(context):
     from qgis.PyQt.QtCore import QTimer
     from qgis.PyQt.QtWidgets import QApplication
 
-    plugin = importlib.import_module(ROOT.name).classFactory(MagicMock())
-    plugin.first_start = False
-    plugin.dlg = context.dialog
+    iface = MagicMock()
+    iface.mainWindow.return_value = None
+    plugin = importlib.import_module(ROOT.name).classFactory(iface)
+    plugin.initGui()
     states = []
 
     def close_dialog():
-        states.append(context.dialog.isMaximized())
-        context.dialog.reject()
+        states.append(plugin.dlg.isMaximized())
+        plugin.dlg.reject()
 
     app = QApplication.instance()
     quit_on_close = app.quitOnLastWindowClosed()
@@ -448,9 +449,11 @@ def check_maximized_dialog(context):
         for _ in range(2):
             QTimer.singleShot(100, close_dialog)
             plugin.run()
-            context.dialog.showNormal()
+            plugin.dlg.showNormal()
     finally:
-        context.dialog.hide()
+        if hasattr(plugin, "dlg"):
+            plugin.dlg.hide()
+            plugin.dlg.preview_dir.cleanup()
         app.setQuitOnLastWindowClosed(quit_on_close)
     assert states == [True, True]
 

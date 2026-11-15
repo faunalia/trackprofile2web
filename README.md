@@ -27,7 +27,7 @@ If you want you can export the map as a single `html` file or as `html` +
 the exported page. The results can be easily embedded in a web page.
 
 The settings interface, defaults and built-in base maps are defined in
-`template.html`; Python handles the QGIS integration and exports.
+`template.html`; `track_profile_2_web.py` handles QGIS integration and exports.
 
 [Click to see a live example](https://www.faunalia.eu/it/dev/trackprofile2web).
 

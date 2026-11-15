@@ -38,13 +38,13 @@ LOCALES =
 # translation
 SOURCES = \
 	__init__.py \
-	track_profile_2_web.py track_profile_2_web_dialog.py
+	track_profile_2_web.py
 
 PLUGINNAME = track_profile_2_web
 
 PY_FILES = \
 	__init__.py \
-	track_profile_2_web.py track_profile_2_web_dialog.py
+	track_profile_2_web.py
 
 EXTRAS = metadata.txt icon.png template.html
 
