@@ -34,6 +34,9 @@ library!
 
 ## BDD tests
 
+GitHub Actions runs the QGIS, browser and metadata scenarios on pushes and pull
+requests.
+
 Install `behave` in the QGIS 4 Python environment and Qt's `lrelease` on PATH
 (required by the translation scenario). From an OSGeo4W shell:
 

@@ -79,6 +79,44 @@
 
 <body>
 
+  <div id="map"></div>
+  <div id="elevation-div" class="leaflet-control elevation"></div>
+
+  <div id="data-summary" class="data-summary"><span class="totlen"><span class="summarylabel">Total Length: </span><span class="summaryvalue">0</span></span> &mdash; <span class="maxele"><span class="summarylabel">Max Elevation: </span><span class="summaryvalue">0</span></span>
+    &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span></div>
+
+  <script>
+    var opts = '{ py_opts }';
+
+    document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
+    var map = new L.Map('map', opts.map);
+
+    var baseLayers = {};
+    baseLayers.OTM = new L.TileLayer(opts.otmLayer.url, opts.otmLayer.options);
+
+    var controlZoom = new L.Control.Zoom(opts.zoomControl);
+    var controlElevation = L.control.elevation(opts.elevationControl.options).addTo(map);
+    var controlLayer = L.control.layers(baseLayers, null, opts.layersControl.options);
+
+    controlZoom.addTo(map);
+    controlLayer.addTo(map);
+
+    map.addLayer(baseLayers.OTM);
+
+    controlElevation.on('eledata_loaded', function(e) {
+      var q = document.querySelector.bind(document);
+      var track = e.track_info;
+
+      controlLayer.addOverlay(e.layer, e.name);
+
+      q('.totlen .summaryvalue').innerHTML = track.distance.toFixed(2) + " km";
+      q('.maxele .summaryvalue').innerHTML = track.elevation_max.toFixed(2) + " m";
+      q('.minele .summaryvalue').innerHTML = track.elevation_min.toFixed(2) + " m";
+    });
+
+    controlElevation.load(opts.elevationControl.data);
+  </script>
+
   <template id="qgis-preview">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -311,44 +349,6 @@
     });
   </script>
   </template>
-
-  <div id="map"></div>
-  <div id="elevation-div" class="leaflet-control elevation"></div>
-
-  <div id="data-summary" class="data-summary"><span class="totlen"><span class="summarylabel">Total Length: </span><span class="summaryvalue">0</span></span> &mdash; <span class="maxele"><span class="summarylabel">Max Elevation: </span><span class="summaryvalue">0</span></span>
-    &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span></div>
-
-  <script>
-    var opts = '{ py_opts }';
-
-    document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
-    var map = new L.Map('map', opts.map);
-
-    var baseLayers = {};
-    baseLayers.OTM = new L.TileLayer(opts.otmLayer.url, opts.otmLayer.options);
-
-    var controlZoom = new L.Control.Zoom(opts.zoomControl);
-    var controlElevation = L.control.elevation(opts.elevationControl.options).addTo(map);
-    var controlLayer = L.control.layers(baseLayers, null, opts.layersControl.options);
-
-    controlZoom.addTo(map);
-    controlLayer.addTo(map);
-
-    map.addLayer(baseLayers.OTM);
-
-    controlElevation.on('eledata_loaded', function(e) {
-      var q = document.querySelector.bind(document);
-      var track = e.track_info;
-
-      controlLayer.addOverlay(e.layer, e.name);
-
-      q('.totlen .summaryvalue').innerHTML = track.distance.toFixed(2) + " km";
-      q('.maxele .summaryvalue').innerHTML = track.elevation_max.toFixed(2) + " m";
-      q('.minele .summaryvalue').innerHTML = track.elevation_min.toFixed(2) + " m";
-    });
-
-    controlElevation.load(opts.elevationControl.data);
-  </script>
 
 </body>
 

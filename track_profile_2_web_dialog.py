@@ -468,14 +468,9 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         '''
         When Detached profile checkbox is checked enable buttons accordingly
         '''
-        if not self.detach_check.isChecked():
-            self.label_position.setEnabled(True)
-            self.profile_combo.setEnabled(True)
-            self.auto_hide.setEnabled(True)
-        else:
-            self.label_position.setEnabled(False)
-            self.profile_combo.setEnabled(False)
-            self.auto_hide.setEnabled(False)
+        enabled = not self.detach_check.isChecked()
+        for control in (self.label_position, self.profile_combo, self.auto_hide):
+            control.setEnabled(enabled)
 
     def refreshState2(self):
         '''
@@ -610,36 +605,26 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # get the path (from tempfolder) where to write the final result
         self.fout = os.path.join(self.preview_dir.name, 'template.html')
 
-        self.lines = self.map_template.splitlines(keepends=True)
-
-        for i, j in enumerate(self.lines):
-            if '{ py_opts }' in j: # search for '{{ py_opts }}' placeholder
-                self.dataidx = i
-            if '{ area_fill_color }' in j: # search for '{ area_fill_color }' placeholder
-                area_fill_idx = i
-            if '{ area_stroke_width }' in j: # search for '{ area_stroke_width }' placeholder
-                area_stroke_width_idx = i
-            if '{ marker_color }' in j: # search for '{ marker_color }' placeholder
-                marker_color_idx = i
-            if '{ line_color }' in j: # search for '{ line_color }' placeholder
-                line_color_idx = i
-            if '{ line_opacity }' in j: # search for '{ line_opacity }' placeholder
-                line_opacity_idx = i
-
-        # dump the opts dictionary as json
-        json_opts = json.dumps(self.opts).replace('</', '<\\/')
-
-        # replace all the user options to the correct line indexes
-        self.lines[self.dataidx] = '  var opts = {} ;'.format(json_opts)
-        self.lines[area_fill_idx] = self.lines[area_fill_idx].replace('{ area_fill_color }', self.profile_color.color().name())
-        self.lines[area_stroke_width_idx] = self.lines[area_stroke_width_idx].replace('{ area_stroke_width }', str(self.profile_stroke_width.value()))
-        self.lines[marker_color_idx] = self.lines[marker_color_idx].replace('{ marker_color }', self.marker_color.color().name())
-        self.lines[line_color_idx] = self.lines[line_color_idx].replace('{ line_color }', self.line_color.color().name())
-        self.lines[line_opacity_idx] = self.lines[line_opacity_idx].replace('{ line_opacity }', str(self.marker_opacity.value()))
+        self.html_template = self.map_template
+        replacements = {
+            '{ area_fill_color }': self.profile_color.color().name(),
+            '{ area_stroke_width }': str(self.profile_stroke_width.value()),
+            '{ marker_color }': self.marker_color.color().name(),
+            '{ line_color }': self.line_color.color().name(),
+            '{ line_opacity }': str(self.marker_opacity.value()),
+        }
+        for placeholder, value in replacements.items():
+            if placeholder not in self.html_template:
+                raise ValueError("Missing template placeholder: " + placeholder)
+            self.html_template = self.html_template.replace(placeholder, value)
+        if "'{ py_opts }'" not in self.html_template:
+            raise ValueError("Missing template placeholder: { py_opts }")
 
         # write the final file
         with open(self.fout, 'w', encoding='utf-8') as fo:
-            fo.writelines(self.lines)
+            fo.write(self.html_template.replace(
+                "'{ py_opts }'", json.dumps(self.opts).replace('</', '<\\/')
+            ))
 
         # get the path of the output file as QUrl
         self._preview_url = QUrl.fromLocalFile(self.fout).toString()
@@ -704,13 +689,12 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         geojson_opts["elevationControl"] = dict(self.opts["elevationControl"])
         geojson_opts["elevationControl"]["data"] = quote(os.path.basename(gjson_name))
 
-        lines = list(self.lines)
-        lines[self.dataidx] = '  var opts = {} ;'.format(json.dumps(geojson_opts).replace('</', '<\\/'))
-
         # write the final file
         try:
             with open(html_name, 'w', encoding='utf-8') as fog:
-                fog.writelines(lines)
+                fog.write(self.html_template.replace(
+                    "'{ py_opts }'", json.dumps(geojson_opts).replace('</', '<\\/')
+                ))
             self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.MessageLevel.Info, duration=3)
         except OSError as error:
             self.bar.pushMessage(self.tr("Something went wrong. Try again."), str(error), level=Qgis.MessageLevel.Critical, duration=3)
