@@ -120,6 +120,33 @@ def check_html_controls(context):
     assert evaluate("document.querySelector('#layer').selectedOptions[0].textContent") == "Test track", "layer"
     assert evaluate("document.querySelector('#preview').src.includes('template.html')"), "preview URL"
     assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
+    wait_until("!!document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]')")
+    assert evaluate("""
+        (() => {
+          const doc = document.querySelector('#preview').contentDocument;
+          const toggle = doc.querySelector('[aria-label="Settings & export"]');
+          const corner = doc.querySelector('.leaflet-top.leaflet-right');
+          const panel = document.querySelector('#settings-panel').getBoundingClientRect();
+          const controls = [...corner.querySelectorAll('.leaflet-control')];
+          const overlaps = (a, b) => a.left < b.right && a.right > b.left
+            && a.top < b.bottom && a.bottom > b.top;
+          return controls.some(control => control.contains(toggle))
+            && controls.filter(control => !control.contains(toggle)).every(control =>
+              !overlaps(toggle.getBoundingClientRect(), control.getBoundingClientRect())
+              && !overlaps(panel, control.getBoundingClientRect()))
+            && doc.documentElement.scrollHeight <= doc.documentElement.clientHeight
+            && document.documentElement.scrollHeight <= document.documentElement.clientHeight;
+        })()
+    """), "Leaflet control placement and page overflow"
+    evaluate("document.querySelector('#preview').contentWindow.controlLayer.expand(); true")
+    wait_until("""(() => {
+      const doc = document.querySelector('#preview').contentDocument;
+      const panel = document.querySelector('#settings-panel').getBoundingClientRect();
+      const layers = doc.querySelector('.leaflet-control-layers').getBoundingClientRect();
+      return panel.right <= layers.left || panel.left >= layers.right
+        || panel.bottom <= layers.top || panel.top >= layers.bottom;
+    })()""")
+    evaluate("document.querySelector('#preview').contentWindow.controlLayer.collapse(); true")
     evaluate("""
         (() => {
           for (const [id, value] of [
@@ -155,8 +182,17 @@ def check_html_controls(context):
     assert context.dialog.marker_color.color().name() == "#ff00ff"
     assert context.dialog.profile_stroke_width.value() == 4
     assert context.dialog.marker_opacity.value() == 0.5
-    assert evaluate("document.querySelector('#panel-toggle').click(); document.querySelector('#settings-panel').hidden"), "hide panel"
-    assert evaluate("document.querySelector('#panel-toggle').click(); !document.querySelector('#settings-panel').hidden"), "show panel"
+    wait_until("""(() => {
+      const frame = document.querySelector('#preview');
+      return frame.contentWindow.opts?.elevationControl.options.position === 'bottomleft'
+        && !!frame.contentDocument.querySelector('[aria-label="Settings & export"]');
+    })()""")
+    assert evaluate("document.querySelector('#preview').contentDocument.querySelector('[aria-label=\"Settings & export\"]').click(); document.querySelector('#settings-panel').hidden"), "hide panel"
+    assert evaluate("""(() => {
+      const button = document.querySelector('#preview').contentDocument.querySelector('[aria-label="Settings & export"]');
+      button.dispatchEvent(new KeyboardEvent('keydown', {key: ' ', bubbles: true}));
+      return !document.querySelector('#settings-panel').hidden;
+    })()"""), "show panel with keyboard"
 
     other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
     feature = QgsFeature(other.fields())
@@ -316,6 +352,34 @@ def check_plugin_actions(context):
     context.iface.addToolBarIcon.assert_called_once()
     context.iface.removePluginWebMenu.assert_called_once()
     context.iface.removeToolBarIcon.assert_called_once()
+
+
+@then("the plugin opens the dialog maximized each time")
+def check_maximized_dialog(context):
+    from qgis.PyQt.QtCore import QTimer
+    from qgis.PyQt.QtWidgets import QApplication
+
+    plugin = importlib.import_module(ROOT.name).classFactory(MagicMock())
+    plugin.first_start = False
+    plugin.dlg = context.dialog
+    states = []
+
+    def close_dialog():
+        states.append(context.dialog.isMaximized())
+        context.dialog.reject()
+
+    app = QApplication.instance()
+    quit_on_close = app.quitOnLastWindowClosed()
+    app.setQuitOnLastWindowClosed(False)
+    try:
+        for _ in range(2):
+            QTimer.singleShot(100, close_dialog)
+            plugin.run()
+            context.dialog.showNormal()
+    finally:
+        context.dialog.hide()
+        app.setQuitOnLastWindowClosed(quit_on_close)
+    assert states == [True, True]
 
 
 @then("the preview contains the line coordinates and elevations")
@@ -485,6 +549,19 @@ def check_chart(context):
     )
     assert context.page.locator(".custom-theme.elevation-control .area path.altitude").count() > 0
     assert context.page.locator(".minele .summaryvalue").inner_text() == "100.00 m"
+    for width, height in ((900, 560), (900, 400), (900, 800), (320, 560)):
+        context.page.set_viewport_size({"width": width, "height": height})
+        context.page.wait_for_timeout(200)
+        assert context.page.evaluate("""
+            () => {
+              const doc = document.documentElement;
+              const summary = document.querySelector('#data-summary').getBoundingClientRect();
+              const chart = document.querySelector('.elevation-control svg.background').getBoundingClientRect();
+              return doc.scrollWidth <= doc.clientWidth && doc.scrollHeight <= doc.clientHeight
+                && chart.bottom <= innerHeight && summary.bottom <= innerHeight
+                && (document.body.classList.contains('attached-profile') || chart.bottom <= summary.top);
+            }
+        """), "chart and summary must fit in the viewport"
 
 
 @then("the profile is attached to the map")

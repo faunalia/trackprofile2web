@@ -7,7 +7,7 @@
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <style>
     * { box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; margin: 0; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
     body { font: 14px/1.4 system-ui, sans-serif; color: #172331; background: #e8edf1; }
     iframe { display: block; width: 100%; height: 100%; border: 0; }
     button, input, select { font: inherit; }
@@ -27,6 +27,7 @@
       overflow: auto; background: white; border-radius: 10px;
       box-shadow: 0 4px 20px #0004;
     }
+    .toggle[hidden] { display: none; }
     .panel[hidden] { display: none; }
     .panel-header { padding: 16px 18px 10px; }
     .panel-header h1 { margin: 0; font-size: 17px; }
@@ -125,14 +126,87 @@
     const basemapOptions = document.getElementById('basemap-options');
     let bridge;
     let currentPreview = '';
+    let mapToggle;
+    let controlsObserver;
 
-    toggle.addEventListener('click', () => {
+    function togglePanel() {
       panel.hidden = !panel.hidden;
       toggle.setAttribute('aria-expanded', String(!panel.hidden));
+      if (mapToggle) mapToggle.setAttribute('aria-expanded', String(!panel.hidden));
+      positionPanel();
+    }
+    toggle.addEventListener('click', togglePanel);
+
+    function positionPanel() {
+      if (!mapToggle) {
+        panel.style.removeProperty('top');
+        panel.style.removeProperty('right');
+        panel.style.removeProperty('width');
+        panel.style.removeProperty('max-height');
+        return;
+      }
+      const frameRect = frame.getBoundingClientRect();
+      const corner = mapToggle.closest('.leaflet-top.leaflet-right').getBoundingClientRect();
+      const button = mapToggle.getBoundingClientRect();
+      const availableWidth = frameRect.left + corner.left - 20;
+      if (availableWidth >= 180) {
+        panel.style.width = Math.min(350, availableWidth) + 'px';
+        panel.style.right = (innerWidth - frameRect.left - corner.left + 8) + 'px';
+        panel.style.top = Math.min(frameRect.top + button.top, Math.max(12, innerHeight - panel.scrollHeight - 12)) + 'px';
+      } else {
+        panel.style.removeProperty('width');
+        panel.style.right = '12px';
+        panel.style.top = (frameRect.top + button.bottom + 8) + 'px';
+      }
+      panel.style.maxHeight = 'calc(100% - ' + (parseFloat(panel.style.top) + 12) + 'px)';
+    }
+
+    frame.addEventListener('load', () => {
+      if (controlsObserver) controlsObserver.disconnect();
+      mapToggle = null;
+      toggle.hidden = false;
+      const mapWindow = frame.contentWindow;
+      if (mapWindow.L && mapWindow.map) {
+        const control = mapWindow.L.control({position: 'topright'});
+        control.onAdd = () => {
+          const container = mapWindow.L.DomUtil.create('div', 'leaflet-bar');
+          mapToggle = mapWindow.L.DomUtil.create('a', '', container);
+          mapToggle.href = '#';
+          mapToggle.title = 'Settings & export';
+          mapToggle.setAttribute('role', 'button');
+          mapToggle.setAttribute('aria-label', 'Settings & export');
+          mapToggle.setAttribute('aria-expanded', String(!panel.hidden));
+          mapToggle.style.fontSize = '20px';
+          mapToggle.textContent = '⚙';
+          mapToggle.addEventListener('click', event => {
+            event.preventDefault();
+            togglePanel();
+          });
+          mapToggle.addEventListener('keydown', event => {
+            if (event.key === ' ') {
+              event.preventDefault();
+              mapToggle.click();
+            }
+          });
+          mapWindow.L.DomEvent.disableClickPropagation(container);
+          return container;
+        };
+        control.addTo(mapWindow.map);
+        toggle.hidden = true;
+        controlsObserver = new ResizeObserver(positionPanel);
+        controlsObserver.observe(mapToggle.closest('.leaflet-top.leaflet-right'));
+      }
+      positionPanel();
     });
+    window.addEventListener('resize', positionPanel);
+    panel.addEventListener('toggle', positionPanel, true);
 
     function showPreview(url) {
       currentPreview = url;
+      if (controlsObserver) controlsObserver.disconnect();
+      mapToggle = null;
+      toggle.hidden = false;
+      positionPanel();
       frame.src = url ? url + '?revision=' + Date.now() : 'about:blank';
     }
 

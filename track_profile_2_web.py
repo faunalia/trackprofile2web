@@ -190,7 +190,7 @@ class TrackProfile2web:
             self.dlg = TrackProfile2webDialog()
 
         # show the dialog
-        self.dlg.show()
+        self.dlg.showMaximized()
         # Run the dialog event loop
         result = self.dlg.exec()
         # See if OK was pressed

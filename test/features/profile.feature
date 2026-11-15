@@ -15,6 +15,11 @@ Feature: Create an elevation profile
     Then its menu and toolbar actions are registered and removed
 
   @qgis
+  Scenario: Open and reopen the dialog maximized
+    Given a QGIS line layer with elevations
+    Then the plugin opens the dialog maximized each time
+
+  @qgis
   Scenario: Add elevations to a line from Mapterhorn
     Given a QGIS line layer without elevations
     When Mapterhorn elevation tiles are available

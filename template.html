@@ -10,7 +10,6 @@
     body,
     #map,
     #elevation-div {
-      height: 100%;
       width: 100%;
       padding: 0px;
       margin: 0px;
@@ -18,27 +17,33 @@
       z-index: 9999;
     }
 
-    #elevation-div { overflow: visible; }
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; }
     #map {
-      height: 75%;
-      position: relative;
+      flex: 1 1 0;
+      min-height: 0;
       z-index: 1;
     }
 
     #elevation-div {
-      height: 25%;
+      flex: 0 0 auto;
       font: 12px/1.5 "Helvetica Neue", Arial, Helvetica, sans-serif;
     }
+    #elevation-div svg.background { display: block; max-width: 100%; max-height: 40vh; }
 
-    body.attached-profile #map { height: 100%; }
     body.attached-profile #elevation-div { display: none; }
 
     .data-summary {
       font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Arial, Helvetica, sans-serif;
       font-size: 12px;
+      margin-left: 45px;
+    }
+
+    body.attached-profile .data-summary {
       position: absolute;
       bottom: 0;
       left: 45px;
+      margin-left: 0;
     }
 
     .data-summary .summaryvalue {
