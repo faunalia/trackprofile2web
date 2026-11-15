@@ -13,6 +13,7 @@ from behave import given, then, when
 ROOT = Path(__file__).resolve().parents[2]
 COORDINATES = [[12.0, 45.0, 100.0], [12.01, 45.01, 200.0]]
 def create_layer(context, geometry_type, crs, wkt):
+    from qgis.PyQt.QtCore import QEventLoop, QTimer
     from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
     from support.hooks import qgis_app
     qgis_app()
@@ -36,6 +37,12 @@ def create_layer(context, geometry_type, crs, wkt):
         lambda status, code: context.renderer_errors.append((status, code))
     )
     context.dialog.layer_combo.setLayer(context.layer)
+    deadline = time.monotonic() + 15
+    while context.dialog.settings is None and time.monotonic() < deadline:
+        loop = QEventLoop()
+        QTimer.singleShot(100, loop.quit)
+        loop.exec()
+    assert context.dialog.settings is not None, "The HTML settings did not initialize"
 
 
 @given("a QGIS line layer {elevation}")
@@ -177,17 +184,17 @@ def check_html_controls(context):
     """)
     wait_until("document.querySelector('[data-action=html]').disabled")
     wait_until("!document.querySelector('[data-action=html]').disabled")
-    assert context.dialog.basemap_combo.currentText() == "OpenStreetMap", "basemap"
-    assert context.dialog.profile_color.color().name() == "#00ff00", "profile color"
+    assert context.dialog.settings["basemap"] == "OpenStreetMap", "basemap"
+    assert context.dialog.settings["profileColor"] == "#00ff00", "profile color"
     assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8"), "generated preview color"
     options = context.dialog.opts["elevationControl"]["options"]
     assert not options["detached"] and options["followMarker"] and options["autohide"]
     assert options["position"] == "bottomleft" and options["collapsed"]
     assert context.dialog.opts["layersControl"]["options"]["collapsed"]
-    assert context.dialog.line_color.color().name() == "#0033ff"
-    assert context.dialog.marker_color.color().name() == "#ff00ff"
-    assert context.dialog.profile_stroke_width.value() == 4
-    assert context.dialog.marker_opacity.value() == 0.5
+    assert context.dialog.settings["lineColor"] == "#0033ff"
+    assert context.dialog.settings["markerColor"] == "#ff00ff"
+    assert context.dialog.settings["profileWidth"] == 4
+    assert context.dialog.settings["markerOpacity"] == 0.5
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
       return frame.contentWindow.opts?.elevationControl.options.position === 'bottomleft'
@@ -262,6 +269,31 @@ def check_html_controls(context):
     assert Path(path).exists(), "exported file"
     html = Path(path).read_text(encoding="utf-8")
     assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
+    evaluate("""(() => {
+      const input = document.querySelector('#profileWidth');
+      input.value = '11'; input.dispatchEvent(new Event('change')); return true;
+    })()""")
+    wait_until("document.querySelector('[data-action=html]').disabled")
+    assert context.dialog.settings["profileWidth"] == 4
+    evaluate("""(() => {
+      const input = document.querySelector('#profileWidth');
+      input.value = '4'; input.dispatchEvent(new Event('change')); return true;
+    })()""")
+    wait_until("!document.querySelector('[data-action=html]').disabled")
+    invalid = dict(context.dialog.settings, profileColor="red; }")
+    with patch.object(context.dialog.bar, "pushMessage") as message:
+        context.dialog.bridge.setOptions(json.dumps(invalid))
+        message.assert_called_once()
+    assert context.dialog.settings["profileColor"] == "#00ff00"
+    evaluate("""(() => {
+      const input = document.querySelector('#basemap');
+      input.value = 'https://example.test/{z}/{x}/{y}.png';
+      input.dispatchEvent(new Event('change')); return true;
+    })()""")
+    wait_until("document.querySelector('[data-action=html]').disabled")
+    wait_until("!document.querySelector('[data-action=html]').disabled")
+    assert context.dialog.opts["otmLayer"]["url"] == "https://example.test/{z}/{x}/{y}.png"
+    assert context.dialog.opts["otmLayer"]["options"]["attribution"] == ""
 
 
 @then("the preview follows option and layer changes without refetching unchanged elevations")
@@ -297,16 +329,20 @@ def check_automatic_preview(context):
         context.dialog.show()
         wait_for_preview()
         assert drape.call_count == 1
-        assert context.dialog.export_btn.isEnabled()
+        assert context.dialog._preview_status == "ready"
 
-        context.dialog.basemap_combo.setCurrentText("OpenStreetMap")
-        context.dialog.profile_color.setColor(QColor("#00ff00"))
-        assert not context.dialog.export_btn.isEnabled()
+        javascript("""(() => {
+          for (const [id, value] of [['basemap', 'OpenStreetMap'], ['profileColor', '#00ff00']]) {
+            const input = document.getElementById(id);
+            input.value = value; input.dispatchEvent(new Event('change'));
+          }
+          return true;
+        })()""")
         wait_for_preview()
         assert drape.call_count == 1
-        assert context.dialog.opts["otmLayer"]["url"] == context.dialog.tile_maps["OpenStreetMap"]["tile"]
+        assert context.dialog.opts["otmLayer"]["url"] == "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8")
-        assert context.dialog.export_btn.isEnabled()
+        assert context.dialog._preview_status == "ready"
 
         feature = next(context.layer.getFeatures())
         assert context.layer.startEditing()
@@ -324,7 +360,7 @@ def check_automatic_preview(context):
         )
         wait_for_preview()
         assert drape.call_count == 3
-        assert not context.dialog.export_btn.isEnabled()
+        assert context.dialog._preview_status == "error"
         assert context.dialog._preview_url == ""
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -345,7 +381,7 @@ def check_automatic_preview(context):
         javascript("document.querySelector('#retry').click(); true")
         wait_for_preview()
         assert drape.call_count == 4
-        assert context.dialog.export_btn.isEnabled()
+        assert context.dialog._preview_status == "ready"
 
         other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
         feature = QgsFeature(other.fields())
@@ -361,7 +397,7 @@ def check_automatic_preview(context):
         QgsProject.instance().removeMapLayer(context.layer.id())
         QgsProject.instance().removeMapLayer(other.id())
         wait_for_preview()
-        assert not context.dialog.export_btn.isEnabled()
+        assert context.dialog._preview_status == "empty"
 
 
 @then("the preview contains the Mapterhorn elevations")
@@ -448,8 +484,7 @@ def check_preview(context):
 
 @then("the export buttons are enabled")
 def exports_enabled(context):
-    assert context.dialog.export_btn.isEnabled()
-    assert context.dialog.export_geojson_btn.isEnabled()
+    assert context.dialog._preview_status == "ready"
 
 
 @then("the QGIS preview displays the elevation chart")
@@ -481,8 +516,7 @@ def check_qgis_chart(context):
 
 @then("the export buttons remain disabled")
 def exports_disabled(context):
-    assert not context.dialog.export_btn.isEnabled()
-    assert not context.dialog.export_geojson_btn.isEnabled()
+    assert context.dialog._preview_status != "ready"
 
 
 @when("I export the HTML and GeoJSON")

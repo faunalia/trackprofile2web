@@ -193,22 +193,22 @@
       <button id="retry" type="button" hidden>Retry preview</button>
       <label class="field">Line layer <select id="layer" aria-label="Line layer"></select></label>
       <label class="field">Base map
-        <input id="basemap" type="text" list="basemap-options" placeholder="Choose a map or enter a tile URL">
+        <input id="basemap" type="text" list="basemap-options" value="OpenTopoMap" required placeholder="Choose a map or enter a tile URL">
         <datalist id="basemap-options"></datalist>
       </label>
       <details>
         <summary>Appearance</summary>
         <div class="grid">
-          <label class="field">Profile color <input id="profileColor" type="color"></label>
-          <label class="field">Track color <input id="lineColor" type="color"></label>
-          <label class="field">Marker color <input id="markerColor" type="color"></label>
-          <label class="field">Profile width <input id="profileWidth" type="number" min="0" max="10" step="0.5"></label>
-          <label class="field">Marker opacity <input id="markerOpacity" type="number" min="0" max="1" step="0.05"></label>
+          <label class="field">Profile color <input id="profileColor" type="color" value="#d45f5f"></label>
+          <label class="field">Track color <input id="lineColor" type="color" value="#ff0000"></label>
+          <label class="field">Marker color <input id="markerColor" type="color" value="#ffb800"></label>
+          <label class="field">Profile width <input id="profileWidth" type="number" min="0" max="10" step="0.5" value="2.5" required></label>
+          <label class="field">Marker opacity <input id="markerOpacity" type="number" min="0" max="1" step="0.05" value="0.85" required></label>
         </div>
       </details>
       <details>
         <summary>Profile and map options</summary>
-        <label class="check"><input id="detached" type="checkbox"> Detached profile</label>
+        <label class="check"><input id="detached" type="checkbox" checked> Detached profile</label>
         <label class="field">Profile position
           <select id="position">
             <option value="topright">Top right</option><option value="topleft">Top left</option>
@@ -242,6 +242,27 @@
     const status = document.getElementById('status');
     const layerSelect = document.getElementById('layer');
     const basemapOptions = document.getElementById('basemap-options');
+    const settings = [...document.querySelectorAll('#settings-panel input, #settings-panel select:not(#layer)')];
+    const basemaps = new Map([
+      ['OpenTopoMap', {
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        attribution: 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenTopoMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+      }],
+      ['OpenStreetMap', {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution: 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+      }],
+      ['WikimediaMap', {
+        url: 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png',
+        attribution: 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+      }],
+      ['Google', {url: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attribution: ''}],
+      ['ESRI Satellite Map', {
+        url: 'http://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attribution: '&copy; <a href="http://www.esri.com/">Esri</a>'
+      }]
+    ]);
+    basemaps.forEach((value, name) => basemapOptions.appendChild(new Option(name)));
     let bridge;
     let currentPreview = '';
     let mapToggle;
@@ -306,18 +327,10 @@
           layerSelect.value = state.layer;
         }
         layerSelect.disabled = !state.layers.length;
-        basemapOptions.replaceChildren();
-        state.basemaps.forEach(name => basemapOptions.appendChild(new Option(name)));
-        for (const [name, value] of Object.entries(state.settings)) {
-          const input = document.getElementById(name);
-          if (input === document.activeElement) continue;
-          if (input.type === 'checkbox') input.checked = value;
-          else input.value = value;
-        }
-        document.getElementById('position').disabled = state.settings.detached;
-        document.getElementById('autohide').disabled = state.settings.detached;
-        document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready);
-        status.textContent = state.status === 'empty' ? 'Add a line layer to the QGIS project.'
+        const valid = settings.every(input => input.checkValidity());
+        document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready || !valid);
+        status.textContent = !valid ? 'Please correct the settings.'
+          : state.status === 'empty' ? 'Add a line layer to the QGIS project.'
           : state.status === 'updating' ? 'Updating preview…'
           : state.status === 'error' ? 'Could not update the preview. See the QGIS message below.' : '';
         document.getElementById('retry').hidden = state.status !== 'error';
@@ -331,21 +344,34 @@
       });
     }
 
+    function updateSettings() {
+      const detached = document.getElementById('detached').checked;
+      document.getElementById('position').disabled = detached;
+      document.getElementById('autohide').disabled = detached;
+      if (settings.every(input => input.checkValidity())) {
+        const values = Object.fromEntries(settings.map(input => [
+          input.id, input.type === 'checkbox' ? input.checked
+            : input.type === 'number' ? input.valueAsNumber : input.value
+        ]));
+        const basemap = basemaps.get(values.basemap) || {url: values.basemap, attribution: ''};
+        values.basemapUrl = basemap.url;
+        values.basemapAttribution = basemap.attribution;
+        bridge.setOptions(JSON.stringify(values));
+      }
+      updateState();
+    }
+
     new QWebChannel(qt.webChannelTransport, channel => {
       bridge = channel.objects.bridge;
       bridge.stateChanged.connect(updateState);
       bridge.previewChanged.connect(showPreview);
       document.getElementById('retry').addEventListener('click', () => bridge.retry());
       layerSelect.addEventListener('change', () => bridge.selectLayer(layerSelect.value));
-      document.querySelectorAll('#settings-panel input, #settings-panel select:not(#layer)').forEach(input => {
-        input.addEventListener('change', () => bridge.setOption(
-          input.id, String(input.type === 'checkbox' ? input.checked : input.value)
-        ));
-      });
+      settings.forEach(input => input.addEventListener('change', updateSettings));
       document.querySelectorAll('[data-action]').forEach(button => {
         button.addEventListener('click', () => bridge.action(button.dataset.action));
       });
-      updateState();
+      updateSettings();
     });
   </script>
   </template>

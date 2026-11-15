@@ -23,7 +23,6 @@
 """
 
 import os
-from collections import OrderedDict
 from shutil import copyfile
 import json
 import tempfile
@@ -34,9 +33,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
-from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtWebEngineCore import QWebEngineSettings
+from qgis.PyQt.QtWebEngineWidgets import QWebEngineView
 from qgis.PyQt.QtCore import (
     QUrl,
     QFileInfo,
@@ -47,10 +46,7 @@ from qgis.PyQt.QtCore import (
 )
 from qgis.PyQt.QtWebChannel import QWebChannel
 
-from qgis.PyQt.QtGui import(
-    QColor,
-    QImage
-)
+from qgis.PyQt.QtGui import QImage
 from qgis.PyQt.QtWidgets import (
     QFileDialog
 )
@@ -68,13 +64,7 @@ from qgis.core import (
     QgsVectorFileWriter
 )
 
-from qgis.gui import(
-    QgsMessageBar
-)
-
-# This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
-FORM_CLASS, _ = uic.loadUiType(os.path.join(
-    os.path.dirname(__file__), 'track_profile_2_web_dialog_base.ui'))
+from qgis.gui import QgsMapLayerComboBox, QgsMessageBar
 
 
 def _fetch_mapterhorn_tile(zoom, x, y):
@@ -211,28 +201,13 @@ class PreviewBridge(QObject):
             "layers": [{"id": layer.id(), "name": layer.name()} for layer in layers if layer],
             "layer": selected.id() if selected else "",
             "preview": dialog._preview_url,
-            "ready": dialog.export_btn.isEnabled(),
+            "ready": dialog._preview_status == "ready",
             "status": dialog._preview_status,
             "message": {
                 "title": message.title(),
                 "text": message.text(),
                 "error": message.level() == Qgis.MessageLevel.Critical,
             } if message else None,
-            "basemaps": list(dialog.tile_maps),
-            "settings": {
-                "basemap": dialog.basemap_combo.currentText(),
-                "profileColor": dialog.profile_color.color().name(),
-                "lineColor": dialog.line_color.color().name(),
-                "markerColor": dialog.marker_color.color().name(),
-                "profileWidth": dialog.profile_stroke_width.value(),
-                "markerOpacity": dialog.marker_opacity.value(),
-                "detached": dialog.detach_check.isChecked(),
-                "position": dialog.profile_combo.currentData(),
-                "follow": dialog.follow_track.isChecked(),
-                "collapseProfile": dialog.profile_collapse.isChecked(),
-                "collapseLayers": dialog.layers_collapse.isChecked(),
-                "autohide": dialog.auto_hide.isChecked(),
-            },
         })
 
     @pyqtSlot(str)
@@ -251,52 +226,46 @@ class PreviewBridge(QObject):
     def retry(self):
         self.dialog._source_changed()
 
-    @pyqtSlot(str, str)
-    def setOption(self, name, value):
-        dialog = self.dialog
-        colors = {"profileColor": dialog.profile_color, "lineColor": dialog.line_color,
-                  "markerColor": dialog.marker_color}
-        checks = {"detached": dialog.detach_check, "follow": dialog.follow_track,
-                  "collapseProfile": dialog.profile_collapse,
-                  "collapseLayers": dialog.layers_collapse, "autohide": dialog.auto_hide}
-        numbers = {"profileWidth": dialog.profile_stroke_width,
-                   "markerOpacity": dialog.marker_opacity}
-        if name in colors and QColor(value).isValid():
-            colors[name].setColor(QColor(value))
+    @pyqtSlot(str)
+    def setOptions(self, value):
+        try:
+            settings = json.loads(value)
+            valid = (
+                isinstance(settings, dict)
+                and isinstance(settings.get("basemap"), str) and bool(settings["basemap"])
+                and isinstance(settings.get("basemapUrl"), str) and bool(settings["basemapUrl"])
+                and isinstance(settings.get("basemapAttribution"), str)
+                and settings.get("position") in ("topright", "topleft", "bottomright", "bottomleft")
+                and all(isinstance(settings.get(key), str) and
+                        re.fullmatch(r"#[0-9a-fA-F]{6}", settings[key])
+                        for key in ("profileColor", "lineColor", "markerColor"))
+                and all(type(settings.get(key)) is bool for key in
+                        ("detached", "follow", "collapseProfile", "collapseLayers", "autohide"))
+                and all(type(settings.get(key)) in (int, float) and
+                        math.isfinite(settings[key]) and 0 <= settings[key] <= maximum
+                        for key, maximum in (("profileWidth", 10), ("markerOpacity", 1)))
+            )
+        except (ValueError, TypeError, OverflowError):
+            valid = False
+        if not valid:
+            self.dialog.bar.pushMessage(
+                self.dialog.tr("Invalid setting."),
+                level=Qgis.MessageLevel.Warning, duration=5
+            )
             return
-        elif name in checks and value in ("true", "false"):
-            checks[name].setChecked(value == "true")
-            return
-        elif name in numbers:
-            try:
-                number = float(value)
-            except ValueError:
-                number = float("nan")
-            if math.isfinite(number) and numbers[name].minimum() <= number <= numbers[name].maximum():
-                numbers[name].setValue(number)
-                return
-        elif name == "basemap" and value:
-            dialog.basemap_combo.setCurrentText(value)
-            return
-        elif name == "position":
-            index = dialog.profile_combo.findData(value)
-            if index >= 0:
-                dialog.profile_combo.setCurrentIndex(index)
-                return
-        dialog.bar.pushMessage(
-            dialog.tr("Invalid setting."), name,
-            level=Qgis.MessageLevel.Warning, duration=5
-        )
+        if settings != self.dialog.settings:
+            self.dialog.settings = settings
+            self.dialog._schedule_preview()
 
     @pyqtSlot(str)
     def action(self, action):
         actions = {
-            "browser": (self.dialog.browser_btn, self.dialog.openBrowser),
-            "html": (self.dialog.export_btn, self.dialog.saveAsHtml),
-            "geojson": (self.dialog.export_geojson_btn, self.dialog.saveAsHtmlGeojson),
+            "browser": self.dialog.openBrowser,
+            "html": self.dialog.saveAsHtml,
+            "geojson": self.dialog.saveAsHtmlGeojson,
         }
-        if action in actions and actions[action][0].isEnabled():
-            actions[action][1]()
+        if action in actions and self.dialog._preview_status == "ready":
+            actions[action]()
         else:
             self.dialog.bar.pushMessage(
                 self.dialog.tr("The requested action is not available."),
@@ -304,94 +273,32 @@ class PreviewBridge(QObject):
             )
 
 
-class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
+class TrackProfile2webDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         """Constructor."""
         super(TrackProfile2webDialog, self).__init__(parent)
-        # Set up the user interface from Designer through FORM_CLASS.
-        # After self.setupUi() you can access any designer object by doing
-        # self.<objectname>, and you can use autoconnect slots - see
-        # http://qt-project.org/doc/qt-4.8/designer-using-a-ui-file.html
-        # #widgets-and-dialogs-with-auto-connect
-        self.setupUi(self)
+        self.setWindowTitle(self.tr("Leaflet Elevation"))
+        self.resize(948, 591)
         self.preview_dir = tempfile.TemporaryDirectory(prefix='trackprofile2web-')
-
-        self.tab_3.hide()
-        self.mapview.setParent(self)
-        self.layout().addWidget(self.mapview, 0, 0)
-        self.layout().setContentsMargins(0, 0, 0, 0)
-        self.layout().setSpacing(0)
+        self.mapview = QWebEngineView(self)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.mapview)
 
         # filter only QgsVector Line Layers
+        self.layer_combo = QgsMapLayerComboBox(self)
+        self.layer_combo.hide()
         self.layer_combo.setFilters(Qgis.LayerFilter.LineLayer)
 
         # Local previews need access to the remote JavaScript and tiles.
         mapview_settings = self.mapview.settings()
         mapview_settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
-        self.tile_maps = OrderedDict([
-            ('OpenTopoMap', {
-                'tile': 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-                'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenTopoMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
-                }
-            ),
-            ('OpenStreetMap', {
-                'tile': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
-                }
-            ),
-            ('WikimediaMap', {
-                'tile': 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png',
-                'attribution': 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
-                }
-            ),
-            ('Google', {
-                'tile': 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-                'attribution': ''
-                }
-            ),
-            ('ESRI Satellite Map', {
-                'tile': 'http://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                'attribution': '&copy; <a href="http://www.esri.com/">Esri</a>'
-                }
-            )
-        ])
-        self.basemap_combo.clear()
-        for k, v in self.tile_maps.items():
-            self.basemap_combo.addItem(k, v)
-
-        # list of attached profile positions as OrderedDict
-        self.profile_position = OrderedDict([
-            (self.tr('Top Right'), 'topright'),
-            (self.tr('Top Left'), 'topleft'),
-            (self.tr('Bottom Right'), 'bottomright'),
-            (self.tr('Bottom Left'), 'bottomleft')
-        ])
-        self.profile_combo.clear()
-        for k, v in self.profile_position.items():
-            self.profile_combo.addItem(k, v)
-
-        # set default colors
-        self.profile_color.setColor(QColor('#d45f5f'))
-        self.marker_color.setColor(QColor('#ffb800'))
-        self.line_color.setColor(QColor('#ff0000'))
-
         # create instance of QgsMessageBar (used later)
         self.bar = QgsMessageBar(self)
         self.bar.hide()
 
-        # connect buttons to specific functions
-        self.browser_btn.clicked.connect(self.openBrowser)
-        self.export_btn.clicked.connect(self.saveAsHtml)
-        self.export_geojson_btn.clicked.connect(self.saveAsHtmlGeojson)
-
-        # connect to function to disable profile position buttons
-        self.detach_check.toggled.connect(self.refreshState)
-        # set profile postion buttons as disabled
-        self.label_position.setEnabled(False)
-        self.profile_combo.setEnabled(False)
-        self.auto_hide.setEnabled(False)
-
+        self.settings = None
         self._source_layer = None
         self._elevated_layer = None
         self._preview_url = ""
@@ -407,15 +314,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self._preview_timer.setInterval(250)
         self._preview_timer.timeout.connect(self.changeMap)
         self.layer_combo.layerChanged.connect(self._set_source_layer)
-        for control in (self.detach_check, self.follow_track, self.profile_collapse,
-                        self.layers_collapse, self.auto_hide):
-            control.toggled.connect(self._schedule_preview)
-        for control in (self.basemap_combo, self.profile_combo):
-            control.currentTextChanged.connect(self._schedule_preview)
-        for control in (self.profile_color, self.marker_color, self.line_color):
-            control.colorChanged.connect(self._schedule_preview)
-        for control in (self.profile_stroke_width, self.marker_opacity):
-            control.valueChanged.connect(self._schedule_preview)
         QgsProject.instance().layersAdded.connect(self.bridge.stateChanged)
         QgsProject.instance().layersRemoved.connect(self.bridge.stateChanged)
         self._set_source_layer(self.layer_combo.currentLayer())
@@ -456,32 +354,10 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self._schedule_preview()
 
     def _schedule_preview(self, *args):
-        for button in (self.browser_btn, self.export_btn, self.export_geojson_btn):
-            button.setEnabled(False)
         self._preview_status = "updating" if self.layer_combo.currentLayer() else "empty"
         self.bridge.stateChanged.emit()
-        if self.isVisible():
+        if self.isVisible() and self.settings is not None:
             self._preview_timer.start()
-
-
-    def refreshState(self):
-        '''
-        When Detached profile checkbox is checked enable buttons accordingly
-        '''
-        enabled = not self.detach_check.isChecked()
-        for control in (self.label_position, self.profile_combo, self.auto_hide):
-            control.setEnabled(enabled)
-
-    def refreshState2(self):
-        '''
-        Enable export actions after the preview has been generated.
-        '''
-
-        self.browser_btn.setEnabled(True)
-        self.export_btn.setEnabled(True)
-        self.export_geojson_btn.setEnabled(True)
-        self._preview_status = "ready"
-        self.bridge.stateChanged.emit()
 
     def changeMap(self):
         '''
@@ -492,6 +368,8 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # reference of the main QgsVectorLayer
         vlayer = self.layer_combo.currentLayer()
 
+        if self.settings is None:
+            return
         if vlayer is None:
             self._preview_url = ""
             self.bridge.previewChanged.emit("")
@@ -585,17 +463,14 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # set the user options to the dictionary
         self.opts["elevationControl"]["data"] = json.dumps(data)
-        self.opts["elevationControl"]["options"]["detached"] = self.detach_check.isChecked()
-        self.opts["elevationControl"]["options"]["followMarker"] = self.follow_track.isChecked()
-        self.opts["elevationControl"]["options"]["position"] = self.profile_position[self.profile_combo.currentText()]
-        self.opts["elevationControl"]["options"]["collapsed"] = self.profile_collapse.isChecked()
-        self.opts["elevationControl"]["options"]["autohide"] = self.auto_hide.isChecked()
-        self.opts["layersControl"]["options"]["collapsed"] = self.layers_collapse.isChecked()
-        try:
-            self.opts["otmLayer"]["url"] = self.tile_maps[self.basemap_combo.currentText()]['tile']
-            self.opts["otmLayer"]["options"]["attribution"] = self.tile_maps[self.basemap_combo.currentText()]['attribution']
-        except KeyError as e:
-            self.opts["otmLayer"]["url"] = self.basemap_combo.currentText()
+        self.opts["elevationControl"]["options"]["detached"] = self.settings["detached"]
+        self.opts["elevationControl"]["options"]["followMarker"] = self.settings["follow"]
+        self.opts["elevationControl"]["options"]["position"] = self.settings["position"]
+        self.opts["elevationControl"]["options"]["collapsed"] = self.settings["collapseProfile"]
+        self.opts["elevationControl"]["options"]["autohide"] = self.settings["autohide"]
+        self.opts["layersControl"]["options"]["collapsed"] = self.settings["collapseLayers"]
+        self.opts["otmLayer"]["url"] = self.settings["basemapUrl"]
+        self.opts["otmLayer"]["options"]["attribution"] = self.settings["basemapAttribution"]
         if self._used_mapterhorn:
             self.opts["otmLayer"]["options"]["attribution"] += (
                 ' | Elevation: <a href="https://mapterhorn.com/attribution">'
@@ -607,11 +482,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self.html_template = self.map_template
         replacements = {
-            '{ area_fill_color }': self.profile_color.color().name(),
-            '{ area_stroke_width }': str(self.profile_stroke_width.value()),
-            '{ marker_color }': self.marker_color.color().name(),
-            '{ line_color }': self.line_color.color().name(),
-            '{ line_opacity }': str(self.marker_opacity.value()),
+            '{ area_fill_color }': self.settings["profileColor"],
+            '{ area_stroke_width }': str(self.settings["profileWidth"]),
+            '{ marker_color }': self.settings["markerColor"],
+            '{ line_color }': self.settings["lineColor"],
+            '{ line_opacity }': str(self.settings["markerOpacity"]),
         }
         for placeholder, value in replacements.items():
             if placeholder not in self.html_template:
@@ -629,7 +504,8 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # get the path of the output file as QUrl
         self._preview_url = QUrl.fromLocalFile(self.fout).toString()
         self.bridge.previewChanged.emit(self._preview_url)
-        self.refreshState2()
+        self._preview_status = "ready"
+        self.bridge.stateChanged.emit()
 
 
     def openBrowser(self):
