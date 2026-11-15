@@ -25,6 +25,17 @@ Feature: Create an elevation profile
     And the exported GeoJSON contains the Mapterhorn elevations
 
   @qgis
+  Scenario: Automatically refresh the preview
+    Given a QGIS line layer without elevations
+    When Mapterhorn elevation tiles are available
+    Then the preview follows option and layer changes without refetching unchanged elevations
+
+  @qgis
+  Scenario: Use the HTML settings panel
+    Given a QGIS line layer with elevations
+    Then the HTML controls change the preview and export a clean page
+
+  @qgis
   Scenario: Keep exports disabled when Mapterhorn has no data
     Given a QGIS line layer without elevations
     When Mapterhorn elevation tiles are unavailable

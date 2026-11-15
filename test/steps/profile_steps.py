@@ -84,6 +84,193 @@ def mapterhorn_tiles_unavailable(context):
     context.mapterhorn_image = None
 
 
+@then("the HTML controls change the preview and export a clean page")
+def check_html_controls(context):
+    from qgis.PyQt.QtCore import QEventLoop, QTimer
+    from qgis.PyQt.QtWidgets import QFileDialog
+    from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
+
+    def evaluate(script):
+        result = []
+        loop = QEventLoop()
+        context.dialog.mapview.page().runJavaScript(
+            script, lambda value: (result.append(value), loop.quit())
+        )
+        QTimer.singleShot(5000, loop.quit)
+        loop.exec()
+        assert result, "The HTML interface did not respond"
+        return result[0]
+
+    def wait_until(script):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if evaluate(script):
+                return
+            loop = QEventLoop()
+            QTimer.singleShot(150, loop.quit)
+            loop.exec()
+        raise AssertionError("HTML interface did not reach expected state: " + script)
+
+    context.dialog.show()
+    wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=html]')?.disabled")
+    assert context.dialog.mapview.width() == context.dialog.width(), "webview width"
+    assert context.dialog.mapview.height() == context.dialog.height(), (
+        context.dialog.mapview.height(), context.dialog.height()
+    )
+    assert evaluate("document.querySelector('#layer').selectedOptions[0].textContent") == "Test track", "layer"
+    assert evaluate("document.querySelector('#preview').src.includes('template.html')"), "preview URL"
+    assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
+    evaluate("""
+        (() => {
+          for (const [id, value] of [
+            ['basemap', 'OpenStreetMap'], ['profileColor', '#00ff00'],
+            ['lineColor', '#0033ff'], ['markerColor', '#ff00ff'],
+            ['profileWidth', '4'], ['markerOpacity', '0.5'], ['position', 'bottomleft']
+          ]) {
+            const input = document.getElementById(id);
+            input.value = value;
+            input.dispatchEvent(new Event('change'));
+          }
+          for (const [id, value] of [
+            ['detached', false], ['follow', true], ['collapseProfile', true],
+            ['autohide', true], ['collapseLayers', true]
+          ]) {
+            const input = document.getElementById(id);
+            input.checked = value;
+            input.dispatchEvent(new Event('change'));
+          }
+          return true;
+        })()
+    """)
+    wait_until("document.querySelector('[data-action=html]').disabled")
+    wait_until("!document.querySelector('[data-action=html]').disabled")
+    assert context.dialog.basemap_combo.currentText() == "OpenStreetMap", "basemap"
+    assert context.dialog.profile_color.color().name() == "#00ff00", "profile color"
+    assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8"), "generated preview color"
+    options = context.dialog.opts["elevationControl"]["options"]
+    assert not options["detached"] and options["followMarker"] and options["autohide"]
+    assert options["position"] == "bottomleft" and options["collapsed"]
+    assert context.dialog.opts["layersControl"]["options"]["collapsed"]
+    assert context.dialog.line_color.color().name() == "#0033ff"
+    assert context.dialog.marker_color.color().name() == "#ff00ff"
+    assert context.dialog.profile_stroke_width.value() == 4
+    assert context.dialog.marker_opacity.value() == 0.5
+    assert evaluate("document.querySelector('#panel-toggle').click(); document.querySelector('#settings-panel').hidden"), "hide panel"
+    assert evaluate("document.querySelector('#panel-toggle').click(); !document.querySelector('#settings-panel').hidden"), "show panel"
+
+    other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
+    feature = QgsFeature(other.fields())
+    feature.setGeometry(QgsGeometry.fromWkt("LINESTRING Z (13 46 200, 14 47 300)"))
+    assert other.dataProvider().addFeatures([feature])[0]
+    QgsProject.instance().addMapLayer(other)
+    wait_until("document.querySelector('#layer').options.length === 2")
+    evaluate("""
+        (() => { const select = document.querySelector('#layer');
+          select.value = %s; select.dispatchEvent(new Event('change')); return true; })()
+    """ % json.dumps(other.id()))
+    wait_until("document.querySelector('[data-action=html]').disabled")
+    wait_until("!document.querySelector('[data-action=html]').disabled")
+    assert context.dialog.layer_combo.currentLayer() == other
+    assert json.loads(context.dialog.opts["elevationControl"]["data"])["name"] == "Other track"
+
+    path = str(Path(context.tempdir.name) / "track.html")
+    with patch.object(QFileDialog, "getSaveFileName", return_value=(path, "*.html")):
+        evaluate("document.querySelector('[data-action=html]').click(); true")
+        wait_until("document.querySelector('#layer').value !== ''")
+    assert Path(path).exists(), "exported file"
+    html = Path(path).read_text(encoding="utf-8")
+    assert "settings-panel" not in html and "#00ff00" in html
+
+
+@then("the preview follows option and layer changes without refetching unchanged elevations")
+def check_automatic_preview(context):
+    from qgis.PyQt.QtCore import QEventLoop, QTimer
+    from qgis.PyQt.QtGui import QColor
+    from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
+
+    def wait_for_preview():
+        loop = QEventLoop()
+        QTimer.singleShot(500, loop.quit)
+        loop.exec()
+
+    def javascript(script):
+        result = []
+        loop = QEventLoop()
+        context.dialog.mapview.page().runJavaScript(
+            script, lambda value: (result.append(value), loop.quit())
+        )
+        QTimer.singleShot(5000, loop.quit)
+        loop.exec()
+        assert result, "The HTML interface did not respond"
+        return result[0]
+
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web_dialog")
+    with patch.object(
+        module, "_fetch_mapterhorn_tile",
+        side_effect=lambda zoom, x, y: context.mapterhorn_image if zoom == 13 else None
+    ), patch.object(
+        module, "_layer_with_mapterhorn_elevations",
+        wraps=module._layer_with_mapterhorn_elevations
+    ) as drape:
+        context.dialog.show()
+        wait_for_preview()
+        assert drape.call_count == 1
+        assert context.dialog.export_btn.isEnabled()
+
+        context.dialog.basemap_combo.setCurrentText("OpenStreetMap")
+        context.dialog.profile_color.setColor(QColor("#00ff00"))
+        assert not context.dialog.export_btn.isEnabled()
+        wait_for_preview()
+        assert drape.call_count == 1
+        assert context.dialog.opts["otmLayer"]["url"] == context.dialog.tile_maps["OpenStreetMap"]["tile"]
+        assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8")
+        assert context.dialog.export_btn.isEnabled()
+
+        feature = next(context.layer.getFeatures())
+        assert context.layer.startEditing()
+        assert context.layer.changeGeometry(
+            feature.id(), QgsGeometry.fromWkt("LINESTRING (12 45, 12.02 45.02)")
+        )
+        wait_for_preview()
+        assert drape.call_count == 2
+        data = json.loads(context.dialog.opts["elevationControl"]["data"])
+        assert data["features"][0]["geometry"]["coordinates"][-1] == [12.02, 45.02, 100]
+
+        context.mapterhorn_image = None
+        assert context.layer.changeGeometry(
+            feature.id(), QgsGeometry.fromWkt("LINESTRING (12 45, 12.03 45.03)")
+        )
+        wait_for_preview()
+        assert drape.call_count == 3
+        assert not context.dialog.export_btn.isEnabled()
+        assert context.dialog._preview_url == ""
+        assert javascript("!document.querySelector('#retry').hidden"), "retry button"
+        assert javascript("document.querySelector('#notice').textContent.includes('Could not get elevations')"), "error message"
+        from qgis.PyQt.QtGui import QImage
+        context.mapterhorn_image = QImage(512, 512, QImage.Format.Format_RGB32)
+        context.mapterhorn_image.fill(QColor(128, 100, 0))
+        javascript("document.querySelector('#retry').click(); true")
+        wait_for_preview()
+        assert drape.call_count == 4
+        assert context.dialog.export_btn.isEnabled()
+
+        other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
+        feature = QgsFeature(other.fields())
+        feature.setGeometry(QgsGeometry.fromWkt("LINESTRING Z (13 46 200, 14 47 300)"))
+        assert other.dataProvider().addFeatures([feature])[0]
+        QgsProject.instance().addMapLayer(other)
+        context.dialog.layer_combo.setLayer(other)
+        wait_for_preview()
+        assert drape.call_count == 4
+        data = json.loads(context.dialog.opts["elevationControl"]["data"])
+        assert data["features"][0]["geometry"]["coordinates"][0] == [13, 46, 200]
+
+        QgsProject.instance().removeMapLayer(context.layer.id())
+        QgsProject.instance().removeMapLayer(other.id())
+        wait_for_preview()
+        assert not context.dialog.export_btn.isEnabled()
+
+
 @then("the preview contains the Mapterhorn elevations")
 def check_mapterhorn_preview(context):
     data = json.loads(context.dialog.opts["elevationControl"]["data"])
@@ -156,7 +343,7 @@ def check_qgis_chart(context):
             result.append(value)
             loop.quit()
         context.dialog.mapview.page().runJavaScript(
-            """JSON.stringify({ready: document.readyState, value: document.querySelector('.maxele .summaryvalue')?.textContent, leaflet: typeof L, url: location.href})""", finish
+            """(() => { const frame = document.querySelector('#preview'); const doc = frame?.contentDocument; return JSON.stringify({ready: doc?.readyState, value: doc?.querySelector('.maxele .summaryvalue')?.textContent, url: frame?.src}); })()""", finish
         )
         QTimer.singleShot(1000, loop.quit)
         loop.exec()
@@ -303,3 +490,6 @@ def check_chart(context):
 @then("the profile is attached to the map")
 def check_attached(context):
     assert context.page.locator("#map .custom-theme.elevation-control").count() == 1
+    assert context.page.locator("#map").evaluate(
+        "element => element.getBoundingClientRect().height === window.innerHeight"
+    )

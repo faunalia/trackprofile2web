@@ -39,16 +39,20 @@ from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtWebEngineCore import QWebEngineSettings
 from qgis.PyQt.QtCore import (
     QUrl,
-    QFileInfo
+    QFileInfo,
+    QTimer,
+    QObject,
+    pyqtSignal,
+    pyqtSlot
 )
+from qgis.PyQt.QtWebChannel import QWebChannel
 
 from qgis.PyQt.QtGui import(
     QColor,
     QImage
 )
 from qgis.PyQt.QtWidgets import (
-    QFileDialog,
-    QSizePolicy
+    QFileDialog
 )
 
 from qgis.core import (
@@ -189,6 +193,117 @@ def _layer_with_mapterhorn_elevations(layer):
     return output
 
 
+class PreviewBridge(QObject):
+    stateChanged = pyqtSignal()
+    previewChanged = pyqtSignal(str)
+
+    def __init__(self, dialog):
+        super().__init__(dialog)
+        self.dialog = dialog
+
+    @pyqtSlot(result=str)
+    def state(self):
+        dialog = self.dialog
+        layers = [dialog.layer_combo.layer(i) for i in range(dialog.layer_combo.count())]
+        selected = dialog.layer_combo.currentLayer()
+        message = dialog.bar.currentItem()
+        return json.dumps({
+            "layers": [{"id": layer.id(), "name": layer.name()} for layer in layers if layer],
+            "layer": selected.id() if selected else "",
+            "preview": dialog._preview_url,
+            "ready": dialog.export_btn.isEnabled(),
+            "status": dialog._preview_status,
+            "message": {
+                "title": message.title(),
+                "text": message.text(),
+                "error": message.level() == Qgis.MessageLevel.Critical,
+            } if message else None,
+            "basemaps": list(dialog.tile_maps),
+            "settings": {
+                "basemap": dialog.basemap_combo.currentText(),
+                "profileColor": dialog.profile_color.color().name(),
+                "lineColor": dialog.line_color.color().name(),
+                "markerColor": dialog.marker_color.color().name(),
+                "profileWidth": dialog.profile_stroke_width.value(),
+                "markerOpacity": dialog.marker_opacity.value(),
+                "detached": dialog.detach_check.isChecked(),
+                "position": dialog.profile_combo.currentData(),
+                "follow": dialog.follow_track.isChecked(),
+                "collapseProfile": dialog.profile_collapse.isChecked(),
+                "collapseLayers": dialog.layers_collapse.isChecked(),
+                "autohide": dialog.auto_hide.isChecked(),
+            },
+        })
+
+    @pyqtSlot(str)
+    def selectLayer(self, layer_id):
+        for i in range(self.dialog.layer_combo.count()):
+            layer = self.dialog.layer_combo.layer(i)
+            if layer and layer.id() == layer_id:
+                self.dialog.layer_combo.setLayer(layer)
+                return
+        self.dialog.bar.pushMessage(
+            self.dialog.tr("The selected layer is no longer available."),
+            level=Qgis.MessageLevel.Warning, duration=5
+        )
+
+    @pyqtSlot()
+    def retry(self):
+        self.dialog._source_changed()
+
+    @pyqtSlot(str, str)
+    def setOption(self, name, value):
+        dialog = self.dialog
+        colors = {"profileColor": dialog.profile_color, "lineColor": dialog.line_color,
+                  "markerColor": dialog.marker_color}
+        checks = {"detached": dialog.detach_check, "follow": dialog.follow_track,
+                  "collapseProfile": dialog.profile_collapse,
+                  "collapseLayers": dialog.layers_collapse, "autohide": dialog.auto_hide}
+        numbers = {"profileWidth": dialog.profile_stroke_width,
+                   "markerOpacity": dialog.marker_opacity}
+        if name in colors and QColor(value).isValid():
+            colors[name].setColor(QColor(value))
+            return
+        elif name in checks and value in ("true", "false"):
+            checks[name].setChecked(value == "true")
+            return
+        elif name in numbers:
+            try:
+                number = float(value)
+            except ValueError:
+                number = float("nan")
+            if math.isfinite(number) and numbers[name].minimum() <= number <= numbers[name].maximum():
+                numbers[name].setValue(number)
+                return
+        elif name == "basemap" and value:
+            dialog.basemap_combo.setCurrentText(value)
+            return
+        elif name == "position":
+            index = dialog.profile_combo.findData(value)
+            if index >= 0:
+                dialog.profile_combo.setCurrentIndex(index)
+                return
+        dialog.bar.pushMessage(
+            dialog.tr("Invalid setting."), name,
+            level=Qgis.MessageLevel.Warning, duration=5
+        )
+
+    @pyqtSlot(str)
+    def action(self, action):
+        actions = {
+            "browser": (self.dialog.browser_btn, self.dialog.openBrowser),
+            "html": (self.dialog.export_btn, self.dialog.saveAsHtml),
+            "geojson": (self.dialog.export_geojson_btn, self.dialog.saveAsHtmlGeojson),
+        }
+        if action in actions and actions[action][0].isEnabled():
+            actions[action][1]()
+        else:
+            self.dialog.bar.pushMessage(
+                self.dialog.tr("The requested action is not available."),
+                level=Qgis.MessageLevel.Warning, duration=5
+            )
+
+
 class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
     def __init__(self, parent=None):
         """Constructor."""
@@ -201,6 +316,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.setupUi(self)
         self.preview_dir = tempfile.TemporaryDirectory(prefix='trackprofile2web-')
 
+        self.tab_3.hide()
+        self.mapview.setParent(self)
+        self.layout().addWidget(self.mapview, 0, 0)
+        self.layout().setContentsMargins(0, 0, 0, 0)
+        self.layout().setSpacing(0)
 
         # filter only QgsVector Line Layers
         self.layer_combo.setFilters(Qgis.LayerFilter.LineLayer)
@@ -257,12 +377,10 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.line_color.setColor(QColor('#ff0000'))
 
         # create instance of QgsMessageBar (used later)
-        self.bar = QgsMessageBar()
-        self.bar.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self.layout().addWidget(self.bar, 1, 0, 1, 1)
+        self.bar = QgsMessageBar(self)
+        self.bar.hide()
 
         # connect buttons to specific functions
-        self.update_btn.clicked.connect(self.changeMap)
         self.browser_btn.clicked.connect(self.openBrowser)
         self.export_btn.clicked.connect(self.saveAsHtml)
         self.export_geojson_btn.clicked.connect(self.saveAsHtmlGeojson)
@@ -273,6 +391,72 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.label_position.setEnabled(False)
         self.profile_combo.setEnabled(False)
         self.auto_hide.setEnabled(False)
+
+        self._source_layer = None
+        self._elevated_layer = None
+        self._preview_url = ""
+        self._preview_status = "empty"
+        self.bridge = PreviewBridge(self)
+        self.channel = QWebChannel(self.mapview.page())
+        self.channel.registerObject("bridge", self.bridge)
+        self.mapview.page().setWebChannel(self.channel)
+        self.bar.widgetAdded.connect(self.bridge.stateChanged)
+        self.bar.widgetRemoved.connect(self.bridge.stateChanged)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(250)
+        self._preview_timer.timeout.connect(self.changeMap)
+        self.layer_combo.layerChanged.connect(self._set_source_layer)
+        for control in (self.detach_check, self.follow_track, self.profile_collapse,
+                        self.layers_collapse, self.auto_hide):
+            control.toggled.connect(self._schedule_preview)
+        for control in (self.basemap_combo, self.profile_combo):
+            control.currentTextChanged.connect(self._schedule_preview)
+        for control in (self.profile_color, self.marker_color, self.line_color):
+            control.colorChanged.connect(self._schedule_preview)
+        for control in (self.profile_stroke_width, self.marker_opacity):
+            control.valueChanged.connect(self._schedule_preview)
+        QgsProject.instance().layersAdded.connect(self.bridge.stateChanged)
+        QgsProject.instance().layersRemoved.connect(self.bridge.stateChanged)
+        self._set_source_layer(self.layer_combo.currentLayer())
+        self.mapview.load(QUrl.fromLocalFile(os.path.join(os.path.dirname(__file__), 'preview.html')))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_preview()
+
+    def hideEvent(self, event):
+        self._preview_timer.stop()
+        super().hideEvent(event)
+
+    def _set_source_layer(self, layer):
+        signals = ('dataChanged', 'geometryChanged', 'featureAdded', 'featureDeleted',
+                   'attributeValueChanged', 'crsChanged', 'nameChanged')
+        if self._source_layer is not None:
+            for name in signals:
+                try:
+                    getattr(self._source_layer, name).disconnect(self._source_changed)
+                except (RuntimeError, TypeError):
+                    pass
+        self._source_layer = layer
+        if layer is not None:
+            for name in signals:
+                getattr(layer, name).connect(self._source_changed)
+        self._source_changed()
+
+    def _source_changed(self, *args):
+        self._elevated_layer = None
+        self._preview_url = ""
+        self.bridge.previewChanged.emit("")
+        self._schedule_preview()
+
+    def _schedule_preview(self, *args):
+        for button in (self.browser_btn, self.export_btn, self.export_geojson_btn):
+            button.setEnabled(False)
+        self._preview_status = "updating" if self.layer_combo.currentLayer() else "empty"
+        self.bridge.stateChanged.emit()
+        if self.isVisible():
+            self._preview_timer.start()
 
 
     def refreshState(self):
@@ -290,13 +474,14 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def refreshState2(self):
         '''
-        Prevent to have clickable button if the Update Map is not clicked
-        at least once
+        Enable export actions after the preview has been generated.
         '''
 
         self.browser_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
         self.export_geojson_btn.setEnabled(True)
+        self._preview_status = "ready"
+        self.bridge.stateChanged.emit()
 
     def changeMap(self):
         '''
@@ -308,27 +493,31 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         vlayer = self.layer_combo.currentLayer()
 
         if vlayer is None:
-            self.bar.pushMessage(self.tr("Select a line layer."), level=Qgis.MessageLevel.Critical, duration=10)
+            self._preview_url = ""
+            self.bridge.previewChanged.emit("")
             return
 
         self._used_mapterhorn = False
         if not QgsWkbTypes.hasZ(vlayer.wkbType()):
-            self.bar.pushMessage(
-                self.tr("Getting elevations from Mapterhorn..."),
-                level=Qgis.MessageLevel.Info,
-                duration=5
-            )
-            QtWidgets.QApplication.processEvents()
-            try:
-                vlayer = _layer_with_mapterhorn_elevations(vlayer)
-            except (OSError, RuntimeError, ValueError, QgsCsException) as error:
+            if self._elevated_layer is None:
                 self.bar.pushMessage(
-                    self.tr("Could not get elevations from Mapterhorn."),
-                    str(error),
-                    level=Qgis.MessageLevel.Critical,
-                    duration=15
+                    self.tr("Getting elevations from Mapterhorn..."),
+                    level=Qgis.MessageLevel.Info,
+                    duration=5
                 )
-                return
+                try:
+                    self._elevated_layer = _layer_with_mapterhorn_elevations(vlayer)
+                except (OSError, RuntimeError, ValueError, QgsCsException) as error:
+                    self._preview_status = "error"
+                    self.bar.pushMessage(
+                        self.tr("Could not get elevations from Mapterhorn."),
+                        str(error),
+                        level=Qgis.MessageLevel.Critical,
+                        duration=15
+                    )
+                    self.bridge.stateChanged.emit()
+                    return
+            vlayer = self._elevated_layer
             self._used_mapterhorn = True
 
         self.vlayer = vlayer
@@ -452,9 +641,8 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             fo.writelines(self.lines)
 
         # get the path of the output file as QUrl
-        leaftemplate_new = QUrl.fromLocalFile(self.fout)
-        # load the QUrl into the preview
-        self.mapview.load(leaftemplate_new)
+        self._preview_url = QUrl.fromLocalFile(self.fout).toString()
+        self.bridge.previewChanged.emit(self._preview_url)
         self.refreshState2()
 
 

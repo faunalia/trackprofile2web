@@ -17,15 +17,15 @@ Mapterhorn attribution is included in the generated map.
 
 The workflow is very simple:
 
-1. select a **line** layer loaded in QGIS from the combobox
-2. choose the tile map
-3. optionally change some customization
-4. click on the `Update Preview` button
-5. that's it! Just navigate in the map and hover the mouse on the profile to
+1. open **Settings & export** over the map
+2. select a **line** layer loaded in QGIS and choose a base map
+3. optionally change the appearance or profile settings
+4. the preview updates automatically. Navigate in the map and hover the mouse on the profile to
    see the position on the map
 
 If you want you can export the map as a single `html` file or as `html` +
-`geojson`. The results can be easily embedded in a web page.
+`geojson`. The settings panel is only shown inside QGIS and is not included in
+the exported page. The results can be easily embedded in a web page.
 
 [Click to see a live example](https://www.faunalia.eu/it/dev/trackprofile2web).
 

@@ -30,6 +30,9 @@
       font: 12px/1.5 "Helvetica Neue", Arial, Helvetica, sans-serif;
     }
 
+    body.attached-profile #map { height: 100%; }
+    body.attached-profile #elevation-div { display: none; }
+
     .data-summary {
       font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Arial, Helvetica, sans-serif;
       font-size: 12px;
@@ -80,6 +83,7 @@
   <script>
     var opts = '{ py_opts }';
 
+    document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
     var map = new L.Map('map', opts.map);
 
     var baseLayers = {};
