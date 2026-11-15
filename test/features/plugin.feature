@@ -53,3 +53,11 @@ Feature: Plugin and QGIS requirements
     Given a plugin ready for packaging with two translations
     When I build the plugin package
     Then the ZIP contains the plugin and both compiled translations
+    And the deployed plugin is unchanged
+
+  @unit
+  Scenario: Package a plugin without translations
+    Given a plugin ready for packaging without translations
+    When I build the plugin package without translations
+    Then the ZIP contains only the plugin files
+    And the deployed plugin is unchanged

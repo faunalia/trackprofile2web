@@ -192,7 +192,6 @@ def check_insecure_upload_url(context):
     assert "Please enter user name" not in context.result.stdout
 
 
-@given("a plugin ready for packaging with two translations")
 def prepare_package(context):
     if os.name != "posix":
         context.scenario.skip("Makefile packaging requires a Unix shell")
@@ -201,6 +200,20 @@ def prepare_package(context):
     for name in ("Makefile", "__init__.py", "track_profile_2_web.py",
                  "metadata.txt", "icon.png", "track_profile_2_web.html", "LICENSE"):
         shutil.copy(ROOT / name, context.package_dir / name)
+    deployed = context.package_dir / "deploy" / "track_profile_2_web"
+    deployed.mkdir(parents=True)
+    (deployed / "stale.txt").write_text("unchanged")
+
+
+@given("a plugin ready for packaging with two translations")
+def prepare_translations(context):
+    prepare_package(context)
+    if os.name != "posix":
+        return
+    git_dir = context.package_dir / "i18n" / ".git"
+    git_dir.mkdir(parents=True)
+    (git_dir / "config").write_text("private")
+    (git_dir.parent / "cache.pyc").write_text("compiled")
     update = context.package_dir / "fake-update"
     update.write_text('#!/bin/sh\nfor last do :; done\nprintf translation > "$last"\n')
     update.chmod(0o755)
@@ -227,4 +240,35 @@ def check_package(context):
         for name in ("LICENSE", "metadata.txt", "__init__.py", "track_profile_2_web.html",
                      "i18n/TrackProfile2web_it.qm", "i18n/TrackProfile2web_de.qm"):
             assert f"track_profile_2_web/{name}" in names
+        assert "track_profile_2_web/stale.txt" not in names
+        assert not any("/.git/" in name or name.endswith(".pyc") for name in names)
         assert archive.testzip() is None
+
+
+@given("a plugin ready for packaging without translations")
+def prepare_untranslated_package(context):
+    prepare_package(context)
+
+
+@when("I build the plugin package without translations")
+def build_untranslated_package(context):
+    subprocess.run(
+        ["make", "zip", "QGISDIR=deploy", f"PYTHON={shlex.quote(sys.executable)}"],
+        cwd=context.package_dir, check=True
+    )
+
+
+@then("the ZIP contains only the plugin files")
+def check_untranslated_package(context):
+    files = ("__init__.py", "track_profile_2_web.py", "metadata.txt",
+             "icon.png", "track_profile_2_web.html", "LICENSE")
+    with zipfile.ZipFile(context.package_dir / "track_profile_2_web.zip") as archive:
+        assert set(archive.namelist()) == {f"track_profile_2_web/{name}" for name in files}
+        assert archive.testzip() is None
+
+
+@then("the deployed plugin is unchanged")
+def check_deployed_plugin(context):
+    deployed = context.package_dir / "deploy" / "track_profile_2_web"
+    assert [path.name for path in deployed.iterdir()] == ["stale.txt"]
+    assert (deployed / "stale.txt").read_text() == "unchanged"

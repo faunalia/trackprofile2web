@@ -26,7 +26,6 @@ import os
 from shutil import copyfile
 import json
 import tempfile
-import webbrowser
 import re
 import math
 from urllib.error import HTTPError
@@ -264,7 +263,6 @@ class PreviewBridge(QObject):
     @pyqtSlot(str)
     def action(self, action):
         actions = {
-            "browser": self.dialog.openBrowser,
             "html": self.dialog.saveAsHtml,
             "geojson": self.dialog.saveAsHtmlGeojson,
         }
@@ -447,14 +445,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
         self.bridge.previewChanged.emit(self._preview_url)
         self._preview_status = "ready"
         self.bridge.stateChanged.emit()
-
-
-    def openBrowser(self):
-        '''
-        Open the html in Browser
-        '''
-
-        webbrowser.open(self.fout)
 
 
     def saveAsHtml(self):

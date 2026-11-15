@@ -121,7 +121,8 @@ def check_html_controls(context):
     assert evaluate("""(() => {
       const panel = document.querySelector('#settings-panel');
       return !panel.hidden && getComputedStyle(panel).display !== 'none'
-        && !document.querySelector('#panel-toggle, #panel-close');
+        && !document.querySelector('#panel-toggle, #panel-close')
+        && [...document.querySelectorAll('[data-action]')].map(button => button.dataset.action).join(',') === 'html,geojson';
     })()"""), "settings must be visible without toggle controls at startup"
     context.dialog.show()
     wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=html]')?.disabled")

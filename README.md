@@ -62,9 +62,9 @@ The Makefile packaging and upload scenarios require a Unix shell.
 
 ## Packaging and translations
 
-On Unix, `make upload` builds the plugin ZIP and uploads it to the QGIS plugin
-repository, prompting for an OSGeo username and password. Set `QGISDIR` if the
-QGIS 4 plugin directory differs from the Makefile default. Upload an existing
+On Unix, `make zip` builds the plugin ZIP without installing it. `make upload`
+builds the ZIP and uploads it to the QGIS plugin repository, prompting for an
+OSGeo username and password. Upload an existing
 `track_profile_2_web.zip` with `make upload-existing`.
 
 To add translations, set `LOCALES` in the Makefile and run `make transup` and
