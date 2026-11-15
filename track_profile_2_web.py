@@ -404,48 +404,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
 
         self.vlayer = vlayer
 
-        # dictionary of all the js functions, will be json dumped after
-        self.opts = {
-            "map": {
-              "center": [41.4583, 12.7059],
-              "zoom": 5,
-              "markerZoomAnimation": False,
-              "zoomControl": False,
-            },
-            "zoomControl": {
-              "position": 'topleft',
-            },
-            "elevationControl": {
-              "data": None, #sample data placeholder
-              "options": {
-                "position": 'topright',
-                "theme": 'custom-theme',
-                "collapsed": True,
-                "detached": False,
-                "elevationDiv": '#elevation-div',
-                "followMarker": False,
-                "autohide": False,
-                "hotline": False,
-                "distanceMarkers": False,
-                "edgeScale": False,
-                "summary": False,
-                "downloadLink": False,
-              },
-            },
-            "layersControl": {
-              "options": {
-                "collapsed": True,
-              },
-            },
-            "otmLayer": {
-              "url" : None,
-              "options": {
-                "attribution": '',
-              }
-            },
-        }
-
-
         data = {"name": self.vlayer.name(), "type": "FeatureCollection", "features": []}
 
         # set the QgsCoordinateTransform context used in to reproject the layer if needed
@@ -465,18 +423,9 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
                 "type": "Feature", "properties": {}, "geometry": json.loads(geometry.asJson())
             })
 
-        # set the user options to the dictionary
-        self.opts["elevationControl"]["data"] = json.dumps(data)
-        self.opts["elevationControl"]["options"]["detached"] = self.settings["detached"]
-        self.opts["elevationControl"]["options"]["followMarker"] = self.settings["follow"]
-        self.opts["elevationControl"]["options"]["position"] = self.settings["position"]
-        self.opts["elevationControl"]["options"]["collapsed"] = self.settings["collapseProfile"]
-        self.opts["elevationControl"]["options"]["autohide"] = self.settings["autohide"]
-        self.opts["layersControl"]["options"]["collapsed"] = self.settings["collapseLayers"]
-        self.opts["otmLayer"]["url"] = self.settings["basemapUrl"]
-        self.opts["otmLayer"]["options"]["attribution"] = self.settings["basemapAttribution"]
+        self.config = {"data": json.dumps(data), "settings": dict(self.settings)}
         if self._used_mapterhorn:
-            self.opts["otmLayer"]["options"]["attribution"] += (
+            self.config["settings"]["basemapAttribution"] += (
                 ' | Elevation: <a href="https://mapterhorn.com/attribution">'
                 '© Mapterhorn</a>'
             )
@@ -484,25 +433,13 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
         # get the path (from tempfolder) where to write the final result
         self.fout = os.path.join(self.preview_dir.name, 'template.html')
 
-        self.html_template = self.map_template
-        replacements = {
-            '{ area_fill_color }': self.settings["profileColor"],
-            '{ area_stroke_width }': str(self.settings["profileWidth"]),
-            '{ marker_color }': self.settings["markerColor"],
-            '{ line_color }': self.settings["lineColor"],
-            '{ line_opacity }': str(self.settings["markerOpacity"]),
-        }
-        for placeholder, value in replacements.items():
-            if placeholder not in self.html_template:
-                raise ValueError("Missing template placeholder: " + placeholder)
-            self.html_template = self.html_template.replace(placeholder, value)
-        if "'{ py_opts }'" not in self.html_template:
+        if "'{ py_opts }'" not in self.map_template:
             raise ValueError("Missing template placeholder: { py_opts }")
 
         # write the final file
         with open(self.fout, 'w', encoding='utf-8') as fo:
-            fo.write(self.html_template.replace(
-                "'{ py_opts }'", json.dumps(self.opts).replace('</', '<\\/')
+            fo.write(self.map_template.replace(
+                "'{ py_opts }'", json.dumps(self.config).replace('</', '<\\/')
             ))
 
         # get the path of the output file as QUrl
@@ -566,15 +503,13 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
             return
 
         # change the raw geojson string with the relative file path
-        geojson_opts = dict(self.opts)
-        geojson_opts["elevationControl"] = dict(self.opts["elevationControl"])
-        geojson_opts["elevationControl"]["data"] = quote(os.path.basename(gjson_name))
+        geojson_config = dict(self.config, data=quote(os.path.basename(gjson_name)))
 
         # write the final file
         try:
             with open(html_name, 'w', encoding='utf-8') as fog:
-                fog.write(self.html_template.replace(
-                    "'{ py_opts }'", json.dumps(geojson_opts).replace('</', '<\\/')
+                fog.write(self.map_template.replace(
+                    "'{ py_opts }'", json.dumps(geojson_config).replace('</', '<\\/')
                 ))
             self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.MessageLevel.Info, duration=3)
         except OSError as error:

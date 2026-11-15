@@ -189,17 +189,17 @@ def check_html_controls(context):
     assert context.dialog.settings["basemap"] == "OpenStreetMap", "basemap"
     assert context.dialog.settings["profileColor"] == "#00ff00", "profile color"
     assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8"), "generated preview color"
-    options = context.dialog.opts["elevationControl"]["options"]
-    assert not options["detached"] and options["followMarker"] and options["autohide"]
-    assert options["position"] == "bottomleft" and options["collapsed"]
-    assert context.dialog.opts["layersControl"]["options"]["collapsed"]
     assert context.dialog.settings["lineColor"] == "#0033ff"
     assert context.dialog.settings["markerColor"] == "#ff00ff"
     assert context.dialog.settings["profileWidth"] == 4
     assert context.dialog.settings["markerOpacity"] == 0.5
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
-      return frame.contentWindow.opts?.elevationControl.options.position === 'bottomleft'
+      const opts = frame.contentWindow.opts;
+      return opts?.elevationControl.options.position === 'bottomleft'
+        && !opts.elevationControl.options.detached && opts.elevationControl.options.followMarker
+        && opts.elevationControl.options.autohide && opts.elevationControl.options.collapsed
+        && opts.layersControl.options.collapsed
         && frame.contentWindow.map.getSize().x === frame.clientWidth
         && !document.querySelector('#settings-panel').hidden
         && !frame.contentDocument.querySelector('[aria-label="Settings & export"]');
@@ -215,6 +215,7 @@ def check_html_controls(context):
       const frame = document.querySelector('#preview');
       return frame.contentWindow.opts?.elevationControl.options.detached
         && !!frame.contentDocument.querySelector('#elevation-div svg.background')
+        && !!frame.contentDocument.querySelector('.custom-theme.elevation-control .area path.altitude')
         && !document.querySelector('#settings-panel').hidden
         && !frame.contentDocument.querySelector('[aria-label="Settings & export"]');
     })()""")
@@ -223,9 +224,11 @@ def check_html_controls(context):
       const doc = frame.contentDocument;
       const chart = doc.querySelector('#elevation-div svg.background').getBoundingClientRect();
       const summary = doc.querySelector('#data-summary').getBoundingClientRect();
+      const area = frame.contentWindow.getComputedStyle(doc.querySelector('.custom-theme.elevation-control .area path.altitude'));
       return chart.right <= frame.clientWidth && chart.bottom <= summary.top
         && doc.documentElement.scrollWidth <= doc.documentElement.clientWidth
-        && doc.documentElement.scrollHeight <= doc.documentElement.clientHeight;
+        && doc.documentElement.scrollHeight <= doc.documentElement.clientHeight
+        && area.fill === 'rgb(0, 255, 0)' && area.strokeWidth === '4px';
     })()"""), "detached chart must fit beside the sidebar"
     other = QgsVectorLayer("LineStringZ?crs=EPSG:4326", "Other track", "memory")
     feature = QgsFeature(other.fields())
@@ -240,7 +243,7 @@ def check_html_controls(context):
     wait_until("document.querySelector('[data-action=html]').disabled")
     wait_until("!document.querySelector('[data-action=html]').disabled")
     assert context.dialog.layer_combo.currentLayer() == other
-    assert json.loads(context.dialog.opts["elevationControl"]["data"])["name"] == "Other track"
+    assert json.loads(context.dialog.config["data"])["name"] == "Other track"
 
     path = str(Path(context.tempdir.name) / "track.html")
     with patch.object(QFileDialog, "getSaveFileName", return_value=(path, "*.html")):
@@ -272,8 +275,13 @@ def check_html_controls(context):
     })()""")
     wait_until("document.querySelector('[data-action=html]').disabled")
     wait_until("!document.querySelector('[data-action=html]').disabled")
-    assert context.dialog.opts["otmLayer"]["url"] == "https://example.test/{z}/{x}/{y}.png"
-    assert context.dialog.opts["otmLayer"]["options"]["attribution"] == ""
+    assert context.dialog.config["settings"]["basemapUrl"] == "https://example.test/{z}/{x}/{y}.png"
+    assert context.dialog.config["settings"]["basemapAttribution"] == ""
+    wait_until("""(() => {
+      const frame = document.querySelector('#preview');
+      return frame.contentDocument.readyState === 'complete'
+        && frame.contentWindow.opts?.otmLayer.url === 'https://example.test/{z}/{x}/{y}.png';
+    })()""")
 
 
 @then("the preview follows option and layer changes without refetching unchanged elevations")
@@ -320,7 +328,7 @@ def check_automatic_preview(context):
         })()""")
         wait_for_preview()
         assert drape.call_count == 1
-        assert context.dialog.opts["otmLayer"]["url"] == "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        assert context.dialog.config["settings"]["basemapUrl"] == "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8")
         assert context.dialog._preview_status == "ready"
 
@@ -331,7 +339,7 @@ def check_automatic_preview(context):
         )
         wait_for_preview()
         assert drape.call_count == 2
-        data = json.loads(context.dialog.opts["elevationControl"]["data"])
+        data = json.loads(context.dialog.config["data"])
         assert data["features"][0]["geometry"]["coordinates"][-1] == [12.02, 45.02, 100]
 
         context.mapterhorn_image = None
@@ -371,7 +379,7 @@ def check_automatic_preview(context):
         context.dialog.layer_combo.setLayer(other)
         wait_for_preview()
         assert drape.call_count == 4
-        data = json.loads(context.dialog.opts["elevationControl"]["data"])
+        data = json.loads(context.dialog.config["data"])
         assert data["features"][0]["geometry"]["coordinates"][0] == [13, 46, 200]
 
         QgsProject.instance().removeMapLayer(context.layer.id())
@@ -382,7 +390,7 @@ def check_automatic_preview(context):
 
 @then("the preview contains the Mapterhorn elevations")
 def check_mapterhorn_preview(context):
-    data = json.loads(context.dialog.opts["elevationControl"]["data"])
+    data = json.loads(context.dialog.config["data"])
     assert data["features"][0]["geometry"]["coordinates"] == [
         [12.0, 45.0, 100.0],
         [12.01, 45.01, 100.0],
@@ -395,7 +403,7 @@ def check_source_layer_is_unchanged(context):
 
     assert not QgsWkbTypes.hasZ(context.layer.wkbType())
     assert QgsWkbTypes.hasZ(context.dialog.vlayer.wkbType())
-    assert "Mapterhorn" in context.dialog.opts["otmLayer"]["options"]["attribution"]
+    assert "Mapterhorn" in context.dialog.config["settings"]["basemapAttribution"]
 
 
 @then("the exported GeoJSON contains the Mapterhorn elevations")
@@ -460,7 +468,7 @@ def check_maximized_dialog(context):
 
 @then("the preview contains the line coordinates and elevations")
 def check_preview(context):
-    data = json.loads(context.dialog.opts["elevationControl"]["data"])
+    data = json.loads(context.dialog.config["data"])
     assert data["features"][0]["geometry"]["coordinates"] == COORDINATES
     assert Path(context.dialog.fout).is_file()
 
@@ -521,7 +529,7 @@ def check_export(context):
 
 @then("the preview still contains embedded data")
 def check_embedded_data(context):
-    assert json.loads(context.dialog.opts["elevationControl"]["data"])["type"] == "FeatureCollection"
+    assert json.loads(context.dialog.config["data"])["type"] == "FeatureCollection"
 
 
 @when("I export the single HTML file")
@@ -541,7 +549,7 @@ def check_html(context):
 
 @then("both outputs contain separate reprojected line parts")
 def check_reprojected_parts(context):
-    preview = json.loads(context.dialog.opts["elevationControl"]["data"])
+    preview = json.loads(context.dialog.config["data"])
     exported = json.loads((Path(context.tempdir.name) / "Test-track.geojson").read_text(encoding="utf-8"))
     for data in (preview, exported):
         geometry = data["features"][0]["geometry"]
@@ -564,29 +572,21 @@ def prepare_web_profile(context, separate, detached=True):
     folder = Path(context.tempdir.name)
     if separate:
         (folder / "track.geojson").write_text(json.dumps(data), encoding="utf-8")
-    opts = {
-        "map": {"center": [45, 12], "zoom": 10, "zoomControl": False},
-        "zoomControl": {"position": "topleft"},
-        "otmLayer": {"url": "", "options": {}},
-        "layersControl": {"options": {"collapsed": True}},
-        "elevationControl": {
-            "data": "track.geojson" if separate else json.dumps(data),
-            "options": {"theme": "custom-theme", "detached": detached,
-                        "elevationDiv": "#elevation-div", "followMarker": False,
-                        "hotline": False, "distanceMarkers": False, "edgeScale": False,
-                        "summary": False, "downloadLink": False}
-        }
+    config = {
+        "data": "track.geojson" if separate else json.dumps(data),
+        "settings": {
+            "basemapUrl": "", "basemapAttribution": "Test basemap attribution",
+            "position": "topright", "detached": detached, "follow": False,
+            "autohide": False, "collapseProfile": False, "collapseLayers": True,
+            "profileColor": "#00ff00", "profileWidth": 4,
+            "markerColor": "#ff00ff", "lineColor": "#0033ff", "markerOpacity": 0.5
+        },
     }
     html = (ROOT / "template.html").read_text(encoding="utf-8")
     before, preview = html.split('<template id="qgis-preview">', 1)
     _, after = preview.split('</template>', 1)
     html = before + after
-    html = html.replace("'{ py_opts }'", json.dumps(opts))
-    for name, value in {
-        "area_fill_color": "#d45f5f", "area_stroke_width": "2.5",
-        "marker_color": "#ffb800", "line_color": "#ff0000", "line_opacity": "0.85"
-    }.items():
-        html = html.replace("{ " + name + " }", value)
+    html = html.replace("'{ py_opts }'", json.dumps(config))
     (folder / "profile.html").write_text(html, encoding="utf-8")
 
 
@@ -627,6 +627,24 @@ def check_chart(context):
     )
     assert context.page.locator(".custom-theme.elevation-control .area path.altitude").count() > 0
     assert context.page.locator(".minele .summaryvalue").inner_text() == "100.00 m"
+    assert context.page.locator(".custom-theme.elevation-control .area path.altitude").first.evaluate(
+        "element => getComputedStyle(element).fill === 'rgb(0, 255, 0)' && getComputedStyle(element).strokeWidth === '4px'"
+    )
+    assert context.page.evaluate("""() => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.innerHTML = '<path class="custom-theme elevation-polyline"></path>' +
+        '<circle class="custom-theme height-focus circle-lower"></circle>';
+      document.body.appendChild(svg);
+      const line = getComputedStyle(svg.querySelector('path'));
+      const marker = getComputedStyle(svg.querySelector('circle'));
+      const matches = line.stroke === 'rgb(0, 51, 255)' && line.strokeOpacity === '0.5'
+        && marker.fill === 'rgb(255, 0, 255)';
+      svg.remove();
+      return matches;
+    }""")
+    attribution = context.page.locator(".leaflet-control-attribution")
+    assert "Test basemap attribution" in attribution.inner_text()
+    assert attribution.get_by_role("link", name="Raruto").get_attribute("href") == "https://github.com/Raruto/leaflet-elevation"
     for width, height in ((900, 560), (900, 400), (900, 800), (320, 560)):
         context.page.set_viewport_size({"width": width, "height": height})
         context.page.wait_for_timeout(200)

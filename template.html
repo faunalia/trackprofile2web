@@ -53,18 +53,18 @@
   </style>
   <style>
    .custom-theme.elevation-control .area path.altitude {
-    fill: { area_fill_color };
+    fill: var(--profile-color);
     stroke: hsla(60, 0%, 0%, 0.85);
-    stroke-width: { area_stroke_width };
+    stroke-width: var(--profile-width);
    }
 
    .custom-theme.height-focus.circle-lower {
-     fill: { marker_color };
+     fill: var(--marker-color);
    }
 
    .custom-theme.elevation-polyline {
-     stroke: { line_color };
-     stroke-opacity: { line_opacity } ;
+     stroke: var(--line-color);
+     stroke-opacity: var(--line-opacity);
    }
  </style>
 
@@ -86,10 +86,40 @@
     &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span></div>
 
   <script>
-    var opts = '{ py_opts }';
+    var config = '{ py_opts }';
+    var settings = config.settings;
+    var opts = {
+      map: {center: [41.4583, 12.7059], zoom: 5, markerZoomAnimation: false, zoomControl: false},
+      zoomControl: {position: 'topleft'},
+      elevationControl: {
+        data: config.data,
+        options: {
+          position: settings.position,
+          theme: 'custom-theme',
+          collapsed: settings.collapseProfile,
+          detached: settings.detached,
+          elevationDiv: '#elevation-div',
+          followMarker: settings.follow,
+          autohide: settings.autohide,
+          hotline: false,
+          distanceMarkers: false,
+          edgeScale: false,
+          summary: false,
+          downloadLink: false
+        }
+      },
+      layersControl: {options: {collapsed: settings.collapseLayers}},
+      otmLayer: {url: settings.basemapUrl, options: {attribution: settings.basemapAttribution}}
+    };
+    document.documentElement.style.setProperty('--profile-color', settings.profileColor);
+    document.documentElement.style.setProperty('--profile-width', settings.profileWidth);
+    document.documentElement.style.setProperty('--marker-color', settings.markerColor);
+    document.documentElement.style.setProperty('--line-color', settings.lineColor);
+    document.documentElement.style.setProperty('--line-opacity', settings.markerOpacity);
 
     document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
     var map = new L.Map('map', opts.map);
+    map.attributionControl.addAttribution('Powered by <a href="https://github.com/Raruto/leaflet-elevation">Raruto</a>');
 
     var baseLayers = {};
     baseLayers.OTM = new L.TileLayer(opts.otmLayer.url, opts.otmLayer.options);
