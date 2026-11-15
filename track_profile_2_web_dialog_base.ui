@@ -191,7 +191,7 @@
           </widget>
          </item>
          <item row="3" column="0" colspan="4">
-          <widget class="QWebView" name="mapview">
+          <widget class="QWebEngineView" name="mapview">
            <property name="url">
             <url>
              <string>about:blank</string>
@@ -317,9 +317,9 @@ p, li { white-space: pre-wrap; }
    <header>qgsmaplayercombobox.h</header>
   </customwidget>
   <customwidget>
-   <class>QWebView</class>
+   <class>QWebEngineView</class>
    <extends>QWidget</extends>
-   <header>QtWebKitWidgets/QWebView</header>
+   <header>qgis.PyQt.QtWebEngineWidgets</header>
   </customwidget>
  </customwidgets>
  <resources/>

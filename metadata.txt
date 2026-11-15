@@ -8,7 +8,7 @@
 
 [general]
 name=Track Profile to Web
-qgisMinimumVersion=3.0
+qgisMinimumVersion=4.0
 description=Leaflet interactive web profiles.
 version=1.3
 author=Matteo Ghetta

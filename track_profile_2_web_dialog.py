@@ -29,10 +29,11 @@ import json
 import tempfile
 import webbrowser
 import re
+from urllib.parse import quote
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtWebKit import QWebSettings
+from qgis.PyQt.QtWebEngineCore import QWebEngineSettings
 from qgis.PyQt.QtCore import (
     QUrl,
     QFileInfo
@@ -46,12 +47,10 @@ from qgis.PyQt.QtGui import(
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QSizePolicy,
-    QGridLayout,
     QPushButton
 )
 
 from qgis.core import (
-    QgsMapLayerProxyModel,
     Qgis,
     QgsWkbTypes,
     QgsCoordinateReferenceSystem,
@@ -79,16 +78,15 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # http://qt-project.org/doc/qt-4.8/designer-using-a-ui-file.html
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
+        self.preview_dir = tempfile.TemporaryDirectory(prefix='trackprofile2web-')
 
 
         # filter only QgsVector Line Layers
-        self.layer_combo.setFilters(QgsMapLayerProxyModel.LineLayer)
+        self.layer_combo.setFilters(Qgis.LayerFilter.LineLayer)
 
-        # get QWebView settings and add options for optimization
+        # Local previews need access to the remote JavaScript and tiles.
         mapview_settings = self.mapview.settings()
-        mapview_settings.setAttribute(QWebSettings.WebGLEnabled, True)
-        mapview_settings.setAttribute(QWebSettings.DeveloperExtrasEnabled, True)
-        mapview_settings.setAttribute(QWebSettings.Accelerated2dCanvasEnabled, True)
+        mapview_settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
         self.tile_maps = OrderedDict([
             ('OpenTopoMap', {
@@ -139,8 +137,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # create instance of QgsMessageBar (used later)
         self.bar = QgsMessageBar()
-        self.bar.setSizePolicy( QSizePolicy.Minimum, QSizePolicy.Fixed )
-        self.setLayout(QGridLayout())
+        self.bar.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.layout().addWidget(self.bar, 1, 0, 1, 1)
 
         # connect buttons to specific functions
@@ -151,7 +148,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # connect to function to disable profile position buttons
         self.detach_check.toggled.connect(self.refreshState)
-        self.update_btn.clicked.connect(self.refreshState2)
         # set profile postion buttons as disabled
         self.label_position.setEnabled(False)
         self.profile_combo.setEnabled(False)
@@ -188,10 +184,14 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         '''
 
         # reference of the main QgsVectorLayer
-        self.vlayer = self.layer_combo.currentLayer()
+        vlayer = self.layer_combo.currentLayer()
+
+        if vlayer is None:
+            self.bar.pushMessage(self.tr("Select a line layer."), level=Qgis.MessageLevel.Critical, duration=10)
+            return
 
         # Check if the layer as Z values, if not stop the algorithm
-        if not QgsWkbTypes.hasZ(self.vlayer.wkbType()):
+        if not QgsWkbTypes.hasZ(vlayer.wkbType()):
 
             def open_drape():
                 '''
@@ -209,8 +209,10 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             # add the button to the messageBar widget
             widget.layout().addWidget(button)
             # create the messageBar with the message and the button
-            self.bar.pushWidget(widget, Qgis.Critical, duration=10)
+            self.bar.pushWidget(widget, Qgis.MessageLevel.Critical, duration=10)
             return
+
+        self.vlayer = vlayer
 
         # dictionary of all the js functions, will be json dumped after
         self.opts = {
@@ -228,12 +230,16 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
               "options": {
                 "position": 'topright',
                 "theme": 'custom-theme',
-                "useHeightIndicator": True,
                 "collapsed": True,
-                "detachedView": False,
+                "detached": False,
                 "elevationDiv": '#elevation-div',
-                "followPositionMarker": False,
+                "followMarker": False,
                 "autohide": False,
+                "hotline": False,
+                "distanceMarkers": False,
+                "edgeScale": False,
+                "summary": False,
+                "downloadLink": False,
               },
             },
             "layersControl": {
@@ -250,11 +256,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         }
 
 
-        data = '''{{"name":"{layer}", "type":"FeatureCollection","features": ['''.format(layer=self.vlayer.name())
+        data = {"name": self.vlayer.name(), "type": "FeatureCollection", "features": []}
 
         # set the QgsCoordinateTransform context used in to reproject the layer if needed
         crsSrc = self.vlayer.crs()
-        crsDest = QgsCoordinateReferenceSystem(4326)
+        crsDest = QgsCoordinateReferenceSystem('EPSG:4326')
         xform = QgsCoordinateTransform(crsSrc, crsDest, QgsProject.instance())
 
         # start the loop to write the data formatted in the correct way
@@ -265,39 +271,14 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             # transform the geometry to 4326 if needed
             if not self.vlayer.crs().authid() == 'EPSG:4326':
                 geometry.transform(xform)
-                i.setGeometry(geometry)
-
-            data += '{ "type": "Feature", "properties": { }, "geometry": { "type": "MultiLineString", "coordinates": [ ['
-
-            # check and tweak the layer if it is MultiPart and has Multiparts
-            if geometry.isMultipart() and i.geometry().constGet().partCount() > 1:
-
-                g = geometry.asGeometryCollection()
-
-                for geom in g:
-                    for part in geom.constParts():
-                        for coord in part:
-                            data += ' [ {}, {},{} ],'.format(coord.x(), coord.y(), coord.z())
-
-            # if the layer is not MultiPart continue
-            else:
-                g = geometry.constParts()
-
-                for part in g:
-                    for coord in part.vertices():
-                        data += ' [ {}, {},{} ],'.format(coord.x(), coord.y(), coord.z())
-
-            data = data[:-1]
-
-            data += ']] } },'
-
-        data = data[:-1]
-        data += ''']}'''
+            data["features"].append({
+                "type": "Feature", "properties": {}, "geometry": json.loads(geometry.asJson())
+            })
 
         # set the user options to the dictionary
-        self.opts["elevationControl"]["data"] = data
-        self.opts["elevationControl"]["options"]["detachedView"] = self.detach_check.isChecked()
-        self.opts["elevationControl"]["options"]["followPositionMarker"] = self.follow_track.isChecked()
+        self.opts["elevationControl"]["data"] = json.dumps(data)
+        self.opts["elevationControl"]["options"]["detached"] = self.detach_check.isChecked()
+        self.opts["elevationControl"]["options"]["followMarker"] = self.follow_track.isChecked()
         self.opts["elevationControl"]["options"]["position"] = self.profile_position[self.profile_combo.currentText()]
         self.opts["elevationControl"]["options"]["collapsed"] = self.profile_collapse.isChecked()
         self.opts["elevationControl"]["options"]["autohide"] = self.auto_hide.isChecked()
@@ -311,11 +292,10 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         # get the path of the template.html file used to write the final file
         self.fin = os.path.join(os.path.dirname(__file__), 'template.html')
         # get the path (from tempfolder) where to write the final result
-        self.fout = os.path.join(
-            tempfile.gettempdir(), 'template.html')
+        self.fout = os.path.join(self.preview_dir.name, 'template.html')
 
         # read the content of the input template.html file
-        with open(self.fin, 'r') as fi:
+        with open(self.fin, 'r', encoding='utf-8') as fi:
             self.lines = fi.readlines()
 
         for i, j in enumerate(self.lines):
@@ -333,7 +313,7 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
                 line_opacity_idx = i
 
         # dump the opts dictionary as json
-        json_opts = json.dumps(self.opts)
+        json_opts = json.dumps(self.opts).replace('</', '<\\/')
 
         # replace all the user options to the correct line indexes
         self.lines[self.dataidx] = '  var opts = {} ;'.format(json_opts)
@@ -344,13 +324,14 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lines[line_opacity_idx] = self.lines[line_opacity_idx].replace('{ line_opacity }', str(self.marker_opacity.value()))
 
         # write the final file
-        with open(self.fout, 'w') as fo:
+        with open(self.fout, 'w', encoding='utf-8') as fo:
             fo.writelines(self.lines)
 
         # get the path of the output file as QUrl
         leaftemplate_new = QUrl.fromLocalFile(self.fout)
-        # load the QUrl into the QWebView
+        # load the QUrl into the preview
         self.mapview.load(leaftemplate_new)
+        self.refreshState2()
 
 
     def openBrowser(self):
@@ -368,14 +349,17 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         '''
 
         dial, _ = QFileDialog.getSaveFileName(None, self.tr("Save Elevation file"), "", "*.html")
+        if not dial:
+            return
         elevation_file = QFileInfo(dial).absoluteFilePath()
-        elevation_file += '.html'
+        if not elevation_file.lower().endswith('.html'):
+            elevation_file += '.html'
 
         try:
             copyfile(self.fout, elevation_file)
-            self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.Info, duration=3)
-        except:
-            self.bar.pushMessage(self.tr("Something went wrong. Try again."), "", level=Qgis.Critical, duration=3)
+            self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.MessageLevel.Info, duration=3)
+        except OSError as error:
+            self.bar.pushMessage(self.tr("Something went wrong. Try again."), str(error), level=Qgis.MessageLevel.Critical, duration=3)
 
     def saveAsHtmlGeojson(self):
         '''
@@ -386,26 +370,34 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
         export_name = re.sub(r'\s+','-', self.vlayer.name())
 
         dir_path = QFileDialog.getExistingDirectory(None, self.tr("Select Directory"))
+        if not dir_path:
+            return
         html_name = os.path.join(dir_path, '{}.html'.format(export_name))
         # remove all spaces from name
         gjson_name = os.path.join(dir_path, '{}.geojson'.format(export_name))
 
-        output = QgsVectorFileWriter.writeAsVectorFormat(
-            layer=self.vlayer,
-            fileEncoding='UTF-8',
-            fileName=gjson_name,
-            driverName='GeoJSON')
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = 'GeoJSON'
+        options.fileEncoding = 'UTF-8'
+        options.ct = QgsCoordinateTransform(self.vlayer.crs(), QgsCoordinateReferenceSystem('EPSG:4326'), QgsProject.instance())
+        output = QgsVectorFileWriter.writeAsVectorFormatV3(
+            self.vlayer, gjson_name, QgsProject.instance().transformContext(), options)
+        if output[0] != QgsVectorFileWriter.WriterError.NoError:
+            self.bar.pushMessage(self.tr("Something went wrong. Try again."), output[1], level=Qgis.MessageLevel.Critical, duration=3)
+            return
 
         # change the raw geojson string with the relative file path
-        self.opts["elevationControl"]["data"] = os.path.basename(gjson_name)
+        geojson_opts = dict(self.opts)
+        geojson_opts["elevationControl"] = dict(self.opts["elevationControl"])
+        geojson_opts["elevationControl"]["data"] = quote(os.path.basename(gjson_name))
 
-        geojson_opts = json.dumps(self.opts)
-        self.lines[self.dataidx] = '  var opts = {} ;'.format(geojson_opts)
+        lines = list(self.lines)
+        lines[self.dataidx] = '  var opts = {} ;'.format(json.dumps(geojson_opts).replace('</', '<\\/'))
 
         # write the final file
         try:
-            with open(html_name, 'w') as fog:
-                fog.writelines(self.lines)
-            self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.Info, duration=3)
-        except:
-            self.bar.pushMessage(self.tr("Something went wrong. Try again."), "", level=Qgis.Critical, duration=3)
+            with open(html_name, 'w', encoding='utf-8') as fog:
+                fog.writelines(lines)
+            self.bar.pushMessage(self.tr("Elevation file succesfully saved"), "", level=Qgis.MessageLevel.Info, duration=3)
+        except OSError as error:
+            self.bar.pushMessage(self.tr("Something went wrong. Try again."), str(error), level=Qgis.MessageLevel.Critical, duration=3)
