@@ -5,10 +5,15 @@ Leaflet and leaflet-elevation 3.0.1 from a CDN, so they require internet access.
 When exporting HTML and GeoJSON separately, serve both files over HTTP(S);
 opening the HTML directly as a local file may block the GeoJSON request.
 
-This plugin allows you to select a line layer with Z values and to create an
+This plugin allows you to select a line layer and to create an
 interactive elevation profile embedded within QGIS itself:
 
 ![preview](img1.png)
+
+For 2D line layers, the plugin automatically fetches elevations from
+[Mapterhorn](https://mapterhorn.com/), so an internet connection is required.
+It creates a temporary 3D copy and leaves the original layer unchanged.
+Mapterhorn attribution is included in the generated map.
 
 The workflow is very simple:
 

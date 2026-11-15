@@ -29,6 +29,9 @@ import json
 import tempfile
 import webbrowser
 import re
+import math
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from urllib.parse import quote
 
 from qgis.PyQt import uic
@@ -39,23 +42,25 @@ from qgis.PyQt.QtCore import (
     QFileInfo
 )
 
-import processing
-
 from qgis.PyQt.QtGui import(
-    QColor
+    QColor,
+    QImage
 )
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
-    QSizePolicy,
-    QPushButton
+    QSizePolicy
 )
 
 from qgis.core import (
     Qgis,
     QgsWkbTypes,
+    QgsVectorLayer,
+    QgsFeature,
+    QgsJsonUtils,
     QgsCoordinateReferenceSystem,
     QgsProject,
     QgsCoordinateTransform,
+    QgsCsException,
     QgsVectorFileWriter
 )
 
@@ -66,6 +71,122 @@ from qgis.gui import(
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'track_profile_2_web_dialog_base.ui'))
+
+
+def _fetch_mapterhorn_tile(zoom, x, y):
+    url = 'https://tiles.mapterhorn.com/{}/{}/{}.webp'.format(zoom, x, y)
+    request = Request(url, headers={'User-Agent': 'TrackProfile2Web'})
+    try:
+        with urlopen(request, timeout=15) as response:
+            image = QImage.fromData(response.read())
+    except HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+    if image.isNull() or image.width() != 512 or image.height() != 512:
+        raise RuntimeError("Mapterhorn returned an invalid elevation tile.")
+    return image
+
+
+def _sample_mapterhorn_elevation(lon, lat, get_tile):
+    lat = max(-85.05112878, min(85.05112878, lat))
+    lon = (lon + 180) % 360 - 180
+    lat_radians = math.radians(lat)
+    best_elevation = None
+
+    def tile_position(zoom):
+        tile_count = 2 ** zoom
+        x = (lon + 180) / 360 * tile_count
+        y = (1 - math.asinh(math.tan(lat_radians)) / math.pi) / 2 * tile_count
+        return x, y, int(x), int(y)
+
+    for zoom in range(13, 20):
+        x, y, tile_x, tile_y = tile_position(zoom)
+        image = get_tile(zoom, tile_x, tile_y)
+        if image is None:
+            break
+        color = image.pixelColor(
+            min(511, int((x - tile_x) * 512)),
+            min(511, int((y - tile_y) * 512))
+        )
+        if color.alpha():
+            best_elevation = color.red() * 256 + color.green() + color.blue() / 256 - 32768
+
+    if best_elevation is None:
+        x, y, tile_x, tile_y = tile_position(12)
+        image = get_tile(12, tile_x, tile_y)
+        if image is not None:
+            color = image.pixelColor(
+                min(511, int((x - tile_x) * 512)),
+                min(511, int((y - tile_y) * 512))
+            )
+            if color.alpha():
+                best_elevation = color.red() * 256 + color.green() + color.blue() / 256 - 32768
+
+    if best_elevation is None:
+        raise ValueError("Mapterhorn has no elevation data at {:.6f}, {:.6f}.".format(lon, lat))
+    return best_elevation
+
+
+def _layer_with_mapterhorn_elevations(layer):
+    destination_crs = QgsCoordinateReferenceSystem('EPSG:4326')
+    transform = QgsCoordinateTransform(layer.crs(), destination_crs, QgsProject.instance())
+    geometry_type = QgsWkbTypes.displayString(
+        QgsWkbTypes.addZ(QgsWkbTypes.dropM(layer.wkbType()))
+    )
+    output = QgsVectorLayer(
+        '{}?crs=EPSG:4326'.format(geometry_type),
+        layer.name(),
+        'memory'
+    )
+    if not output.isValid():
+        raise RuntimeError("Could not create the temporary 3D line layer.")
+
+    provider = output.dataProvider()
+    provider.addAttributes(layer.fields())
+    output.updateFields()
+    tile_cache = {}
+
+    def get_tile(zoom, x, y):
+        key = (zoom, x, y)
+        if key not in tile_cache:
+            tile_cache[key] = _fetch_mapterhorn_tile(zoom, x, y)
+        return tile_cache[key]
+
+    features = []
+    for source_feature in layer.getFeatures():
+        geometry = source_feature.geometry()
+        if layer.crs().authid() != 'EPSG:4326':
+            geometry.transform(transform)
+        geometry_json = json.loads(geometry.asJson())
+
+        def add_elevations(coordinates):
+            if not coordinates:
+                return coordinates
+            if isinstance(coordinates[0], (int, float)):
+                return [
+                    coordinates[0],
+                    coordinates[1],
+                    _sample_mapterhorn_elevation(
+                        coordinates[0], coordinates[1], get_tile
+                    )
+                ]
+            return [add_elevations(part) for part in coordinates]
+
+        geometry_json['coordinates'] = add_elevations(geometry_json['coordinates'])
+        elevated_feature = QgsFeature(output.fields())
+        elevated_feature.setAttributes(source_feature.attributes())
+        elevated_geometry = QgsJsonUtils.geometryFromGeoJson(json.dumps(geometry_json))
+        if elevated_geometry.isNull():
+            raise RuntimeError("Could not create the elevated geometry.")
+        elevated_feature.setGeometry(elevated_geometry)
+        features.append(elevated_feature)
+
+    added = provider.addFeatures(features)
+    if not (added[0] if isinstance(added, tuple) else added):
+        raise RuntimeError("Could not populate the temporary 3D line layer.")
+    output.updateExtents()
+    return output
 
 
 class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
@@ -190,27 +311,25 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             self.bar.pushMessage(self.tr("Select a line layer."), level=Qgis.MessageLevel.Critical, duration=10)
             return
 
-        # Check if the layer as Z values, if not stop the algorithm
+        self._used_mapterhorn = False
         if not QgsWkbTypes.hasZ(vlayer.wkbType()):
-
-            def open_drape():
-                '''
-                function to open Processing algorithm dialog, used later
-                '''
-                processing.execAlgorithmDialog('native:setzfromraster')
-
-            # create the widget with the message that will be shown
-            widget = self.bar.createMessage(self.tr("The selected layer has not Z values. Add them using the Drape algorithm of the Processing toolbox"))
-            # create the button to put into the messageBar
-            button = QPushButton(widget)
-            button.setText(self.tr('Open Drape Algorithm?'))
-            # connect the button to the function to open the drape algorithm
-            button.pressed.connect(open_drape)
-            # add the button to the messageBar widget
-            widget.layout().addWidget(button)
-            # create the messageBar with the message and the button
-            self.bar.pushWidget(widget, Qgis.MessageLevel.Critical, duration=10)
-            return
+            self.bar.pushMessage(
+                self.tr("Getting elevations from Mapterhorn..."),
+                level=Qgis.MessageLevel.Info,
+                duration=5
+            )
+            QtWidgets.QApplication.processEvents()
+            try:
+                vlayer = _layer_with_mapterhorn_elevations(vlayer)
+            except (OSError, RuntimeError, ValueError, QgsCsException) as error:
+                self.bar.pushMessage(
+                    self.tr("Could not get elevations from Mapterhorn."),
+                    str(error),
+                    level=Qgis.MessageLevel.Critical,
+                    duration=15
+                )
+                return
+            self._used_mapterhorn = True
 
         self.vlayer = vlayer
 
@@ -288,6 +407,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog, FORM_CLASS):
             self.opts["otmLayer"]["options"]["attribution"] = self.tile_maps[self.basemap_combo.currentText()]['attribution']
         except KeyError as e:
             self.opts["otmLayer"]["url"] = self.basemap_combo.currentText()
+        if self._used_mapterhorn:
+            self.opts["otmLayer"]["options"]["attribution"] += (
+                ' | Elevation: <a href="https://mapterhorn.com/attribution">'
+                '© Mapterhorn</a>'
+            )
 
         # get the path of the template.html file used to write the final file
         self.fin = os.path.join(os.path.dirname(__file__), 'template.html')

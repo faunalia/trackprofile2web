@@ -44,7 +44,10 @@ def load_crs(context):
            'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
     context.crs = QgsCoordinateReferenceSystem()
     assert context.crs.createFromWkt(wkt)
-    context.raster = QgsRasterLayer(str(ROOT / "test" / "tenbytenraster.asc"), "TestRaster")
+    context.raster = QgsRasterLayer(
+        str(ROOT / "test" / "fixtures" / "tenbytenraster.asc"),
+        "TestRaster"
+    )
     assert context.raster.isValid()
 
 

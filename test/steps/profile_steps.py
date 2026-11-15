@@ -55,7 +55,62 @@ def projected_layer(context):
 
 @when("I update the preview")
 def update_preview(context):
-    context.dialog.changeMap()
+    if not getattr(context, "mapterhorn_mock", False):
+        context.dialog.changeMap()
+        return
+
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web_dialog")
+    image = context.mapterhorn_image
+    with patch.object(
+        module,
+        "_fetch_mapterhorn_tile",
+        side_effect=lambda zoom, x, y: image if zoom == 13 else None
+    ):
+        context.dialog.changeMap()
+
+
+@when("Mapterhorn elevation tiles are available")
+def mapterhorn_tiles_available(context):
+    from qgis.PyQt.QtGui import QColor, QImage
+
+    context.mapterhorn_mock = True
+    context.mapterhorn_image = QImage(512, 512, QImage.Format.Format_RGB32)
+    context.mapterhorn_image.fill(QColor(128, 100, 0))
+
+
+@when("Mapterhorn elevation tiles are unavailable")
+def mapterhorn_tiles_unavailable(context):
+    context.mapterhorn_mock = True
+    context.mapterhorn_image = None
+
+
+@then("the preview contains the Mapterhorn elevations")
+def check_mapterhorn_preview(context):
+    data = json.loads(context.dialog.opts["elevationControl"]["data"])
+    assert data["features"][0]["geometry"]["coordinates"] == [
+        [12.0, 45.0, 100.0],
+        [12.01, 45.01, 100.0],
+    ]
+
+
+@then("the original layer remains 2D")
+def check_source_layer_is_unchanged(context):
+    from qgis.core import QgsWkbTypes
+
+    assert not QgsWkbTypes.hasZ(context.layer.wkbType())
+    assert QgsWkbTypes.hasZ(context.dialog.vlayer.wkbType())
+    assert "Mapterhorn" in context.dialog.opts["otmLayer"]["options"]["attribution"]
+
+
+@then("the exported GeoJSON contains the Mapterhorn elevations")
+def check_mapterhorn_export(context):
+    data = json.loads(
+        (Path(context.tempdir.name) / "Test-track.geojson").read_text(encoding="utf-8")
+    )
+    assert data["features"][0]["geometry"]["coordinates"] == [
+        [12.0, 45.0, 100.0],
+        [12.01, 45.01, 100.0],
+    ]
 
 
 @when("the plugin is loaded and unloaded")

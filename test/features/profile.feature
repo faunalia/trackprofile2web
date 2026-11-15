@@ -15,9 +15,20 @@ Feature: Create an elevation profile
     Then its menu and toolbar actions are registered and removed
 
   @qgis
-  Scenario: Reject a line without elevations
+  Scenario: Add elevations to a line from Mapterhorn
     Given a QGIS line layer without elevations
-    When I update the preview
+    When Mapterhorn elevation tiles are available
+    And I update the preview
+    And I export the HTML and GeoJSON
+    Then the preview contains the Mapterhorn elevations
+    And the original layer remains 2D
+    And the exported GeoJSON contains the Mapterhorn elevations
+
+  @qgis
+  Scenario: Keep exports disabled when Mapterhorn has no data
+    Given a QGIS line layer without elevations
+    When Mapterhorn elevation tiles are unavailable
+    And I update the preview
     Then the export buttons remain disabled
 
   @qgis
