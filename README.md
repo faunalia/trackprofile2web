@@ -3,7 +3,7 @@
 A QGIS 4 plugin for interactive elevation profiles from line layers. Preview the
 map in QGIS, then export it as a standalone HTML file or as HTML plus GeoJSON.
 
-![Preview](img1.png)
+![Preview](trackprofile2web.png)
 
 ## Requirements
 
