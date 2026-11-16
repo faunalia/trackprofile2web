@@ -128,6 +128,10 @@ def check_html_controls(context):
         && [...document.querySelectorAll('[data-action]')].map(button => button.dataset.action).join(',') === 'html,geojson';
     })()"""), "settings must be visible without toggle controls at startup"
     wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=html]')?.disabled")
+    assert evaluate("""(() => document.getElementById('theme').value === 'lightblue-theme'
+      && !document.getElementById('advanced-options').open
+      && document.getElementById('custom-appearance').hidden
+      && document.querySelector('#preview').contentDocument.querySelector('.lightblue-theme.elevation-control'))()"""), "default theme and collapsed advanced options"
     assert evaluate("document.querySelector('#layer').selectedOptions[0].textContent") == "Test track", "layer"
     assert evaluate("document.querySelector('#preview').src.includes('map.html')"), "preview URL"
     assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
@@ -164,7 +168,8 @@ def check_html_controls(context):
     evaluate("""
         (() => {
           for (const [id, value] of [
-            ['basemap', 'OpenStreetMap'], ['profileColor', '#00ff00'],
+            ['basemap', 'OpenStreetMap'], ['theme', 'custom-theme'],
+            ['profileColor', '#00ff00'],
             ['lineColor', '#0033ff'], ['markerColor', '#ff00ff'],
             ['profileWidth', '4'], ['markerOpacity', '0.5'], ['position', 'bottomleft'],
             ['interpolation', 'curveStep'], ['yAxisMin', '0'], ['yAxisMax', '500'],
@@ -190,7 +195,10 @@ def check_html_controls(context):
     """)
     wait_until("document.querySelector('[data-action=html]').disabled")
     wait_until("!document.querySelector('[data-action=html]').disabled")
+    assert evaluate("""(() => !document.getElementById('custom-appearance').hidden
+      && !document.getElementById('advanced-options').open)()"""), "custom controls should follow the theme selection"
     assert context.dialog.settings["basemap"] == "OpenStreetMap", "basemap"
+    assert context.dialog.settings["theme"] == "custom-theme"
     assert context.dialog.settings["profileColor"] == "#00ff00", "profile color"
     assert "#00ff00" in Path(context.dialog.fout).read_text(encoding="utf-8"), "generated preview color"
     assert context.dialog.settings["lineColor"] == "#0033ff"
@@ -210,7 +218,7 @@ def check_html_controls(context):
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
       const options = frame.contentWindow.controlElevation?.options;
-      return options?.position === 'bottomleft'
+      return options?.position === 'bottomleft' && options.theme === 'custom-theme'
         && !options.detached && options.followMarker
         && options.autohide && options.collapsed
         && options.slope && options.imperial
@@ -324,6 +332,11 @@ def check_html_controls(context):
         context.dialog.bridge.setOptions(json.dumps(invalid))
         message.assert_called_once()
     assert context.dialog.settings["profileColor"] == "#00ff00"
+    invalid = dict(context.dialog.settings, theme="unknown-theme")
+    with patch.object(context.dialog.bar, "pushMessage") as message:
+        context.dialog.bridge.setOptions(json.dumps(invalid))
+        message.assert_called_once()
+    assert context.dialog.settings["theme"] == "custom-theme"
     invalid = dict(context.dialog.settings, yAxisMin=600, yAxisMax=500)
     with patch.object(context.dialog.bar, "pushMessage") as message:
         context.dialog.bridge.setOptions(json.dumps(invalid))
@@ -385,7 +398,9 @@ def check_automatic_preview(context):
         assert context.dialog._preview_status == "ready"
 
         javascript("""(() => {
-          for (const [id, value] of [['basemap', 'OpenStreetMap'], ['profileColor', '#00ff00']]) {
+          for (const [id, value] of [
+            ['basemap', 'OpenStreetMap'], ['theme', 'custom-theme'], ['profileColor', '#00ff00']
+          ]) {
             const input = document.getElementById(id);
             input.value = value; input.dispatchEvent(new Event('change'));
           }
@@ -714,7 +729,7 @@ def prepare_web_profile(context, separate, detached=True, overrides=None):
         "data": "track.geojson" if separate else json.dumps(data),
         "settings": {
             "basemapUrl": "", "basemapAttribution": "Test basemap attribution",
-            "position": "topright", "detached": detached, "follow": False,
+            "position": "topright", "theme": "custom-theme", "detached": detached, "follow": False,
             "autohide": False, "collapseProfile": False, "collapseLayers": True,
             "profileColor": "#00ff00", "profileWidth": 4,
             "markerColor": "#ff00ff", "lineColor": "#0033ff", "markerOpacity": 0.5,

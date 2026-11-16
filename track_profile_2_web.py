@@ -240,6 +240,9 @@ class PreviewBridge(QObject):
                 and isinstance(settings.get("basemapUrl"), str) and bool(settings["basemapUrl"])
                 and isinstance(settings.get("basemapAttribution"), str)
                 and settings.get("position") in ("topright", "topleft", "bottomright", "bottomleft")
+                and settings.get("theme") in
+                    ("lightblue-theme", "steelblue-theme", "lime-theme", "purple-theme",
+                     "yellow-theme", "red-theme", "magenta-theme", "custom-theme")
                 and all(isinstance(settings.get(key), str) and
                         re.fullmatch(r"#[0-9a-fA-F]{6}", settings[key])
                         for key in ("profileColor", "lineColor", "markerColor"))

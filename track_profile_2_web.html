@@ -198,7 +198,7 @@
       const controlZoom = window.controlZoom = new L.Control.Zoom({position: 'topleft'});
       const controlElevation = window.controlElevation = L.control.elevation({
         position: settings.position,
-        theme: 'custom-theme',
+        theme: settings.theme || 'lightblue-theme',
         collapsed: settings.collapseProfile,
         detached: settings.detached,
         elevationDiv: '#elevation-div',
@@ -341,6 +341,7 @@
   <aside id="settings-panel" class="panel" aria-label="Track profile settings">
     <header class="panel-header">
       <h1>Track profile</h1>
+      <p class="hint">Choose a line and map to preview or export your profile.</p>
     </header>
     <div class="content">
       <div id="status" class="status" role="status">Connecting to QGIS…</div>
@@ -350,8 +351,19 @@
         <input id="basemap" type="text" list="basemap-options" value="OpenTopoMap" required placeholder="Choose a map or enter a tile URL">
         <datalist id="basemap-options"></datalist>
       </label>
-      <details>
-        <summary>Appearance</summary>
+      <label class="field">Profile theme
+        <select id="theme">
+          <option value="lightblue-theme">Light blue</option>
+          <option value="steelblue-theme">Steel blue</option>
+          <option value="lime-theme">Lime</option>
+          <option value="purple-theme">Purple</option>
+          <option value="yellow-theme">Yellow</option>
+          <option value="red-theme">Red</option>
+          <option value="magenta-theme">Magenta</option>
+          <option value="custom-theme">Custom</option>
+        </select>
+      </label>
+      <div id="custom-appearance" hidden>
         <div class="grid">
           <label class="field">Profile color <input id="profileColor" type="color" value="#d45f5f"></label>
           <label class="field">Track color <input id="lineColor" type="color" value="#ff0000"></label>
@@ -359,9 +371,10 @@
           <label class="field">Profile width <input id="profileWidth" type="number" min="0" max="10" step="0.5" value="2.5" required></label>
           <label class="field">Marker opacity <input id="markerOpacity" type="number" min="0" max="1" step="0.05" value="0.85" required></label>
         </div>
-      </details>
-      <details>
-        <summary>Profile and map options</summary>
+      </div>
+      <label class="check"><input id="imperial" type="checkbox"> Use imperial units</label>
+      <details id="advanced-options">
+        <summary>Advanced options</summary>
         <label class="check"><input id="detached" type="checkbox" checked> Detached profile</label>
         <label class="field">Profile position
           <select id="position">
@@ -376,11 +389,7 @@
         <label class="check"><input id="rotateMap" type="checkbox"> Enable map rotation</label>
         <label class="check"><input id="terrain3D" type="checkbox"> Show 3D terrain (BETA)</label>
         <p class="hint">3D terrain requires WebGPU, online elevation tiles and a base map that allows CORS.</p>
-      </details>
-      <details>
-        <summary>Chart and track</summary>
         <label class="check"><input id="slope" type="checkbox"> Show slope and ascent/descent</label>
-        <label class="check"><input id="imperial" type="checkbox"> Use miles and feet</label>
         <label class="check"><input id="distanceMarkers" type="checkbox"> Distance and direction markers</label>
         <label class="check"><input id="hotline" type="checkbox"> Color track by elevation</label>
         <label class="check"><input id="legend" type="checkbox" checked> Show legend</label>
@@ -427,19 +436,14 @@
           <button data-action="geojson" type="button" disabled>Export HTML + GeoJSON</button>
         </div>
       </details>
-      <details>
-        <summary>About</summary>
-        <p class="hint"><strong>Track Profile to Web</strong> creates interactive maps and elevation profiles from QGIS line layers.
-          Created by Matteo Ghetta. <a href="https://github.com/faunalia/trackprofile2web">Source code and issues</a>.</p>
-        <p class="hint"><strong>Elevation data:</strong> lines without Z values are sampled from
-          <a href="https://mapterhorn.com/attribution">Mapterhorn</a> without changing the original layer.
-          The optional 3D terrain also uses Mapterhorn.</p>
-        <p class="hint"><strong>Built with:</strong> <a href="https://leafletjs.com/">Leaflet</a> and
-          <a href="https://github.com/Raruto/leaflet-elevation">leaflet-elevation</a>,
-          <a href="https://github.com/Raruto/leaflet-rotate">leaflet-rotate</a> and
-          <a href="https://github.com/Raruto/leaflet-city-mapper">leaflet-city-mapper</a> by
-          <a href="https://github.com/Raruto">Raruto</a>.</p>
-      </details>
+      <p class="hint"><strong>Track Profile to Web</strong> created by <a href="https://github.com/faunalia/trackprofile2web">Matteo Ghetta</a>.</p>
+      <p class="hint"><strong>Elevation data:</strong> sampled from <a href="https://mapterhorn.com/attribution">Mapterhorn</a>.</p>
+      <p class="hint"><strong>Built with:</strong> <a href="https://leafletjs.com/">Leaflet</a> and
+        <a href="https://github.com/Raruto/leaflet-elevation">leaflet-elevation</a>,
+        <a href="https://github.com/Raruto/leaflet-rotate">leaflet-rotate</a> and
+        <a href="https://github.com/Raruto/leaflet-city-mapper">leaflet-city-mapper</a> by
+        <a href="https://github.com/Raruto">Raruto</a>.
+      </p>
     </div>
   </aside>
   <script>
@@ -539,6 +543,8 @@
       const detached = document.getElementById('detached').checked;
       document.getElementById('position').disabled = detached;
       document.getElementById('autohide').disabled = detached;
+      document.getElementById('custom-appearance').hidden =
+        document.getElementById('theme').value !== 'custom-theme';
       for (const axis of ['x', 'y']) {
         const min = document.getElementById(axis + 'AxisMin');
         const max = document.getElementById(axis + 'AxisMax');
@@ -567,6 +573,8 @@
           if (input.type === 'checkbox') input.checked = state.settings[input.id];
           else input.value = state.settings[input.id] ?? '';
         });
+        document.getElementById('custom-appearance').hidden =
+          state.settings.theme !== 'custom-theme';
       }
       document.getElementById('retry').addEventListener('click', () => send('retry'));
       layerSelect.addEventListener('change', () => send('selectLayer', layerSelect.value));
