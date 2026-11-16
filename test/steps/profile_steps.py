@@ -32,6 +32,7 @@ def create_layer(context, geometry_type, crs, wkt):
     context.layer.dataProvider().addFeatures([feature])
     QgsProject.instance().addMapLayer(context.layer)
     context.dialog = TrackProfile2webDialog()
+    context.dialog.show()
     context.load_results = []
     context.dialog.mapview.loadFinished.connect(context.load_results.append)
     context.renderer_errors = []
@@ -126,14 +127,9 @@ def check_html_controls(context):
         && !document.querySelector('#panel-toggle, #panel-close')
         && [...document.querySelectorAll('[data-action]')].map(button => button.dataset.action).join(',') === 'html,geojson';
     })()"""), "settings must be visible without toggle controls at startup"
-    context.dialog.show()
     wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=html]')?.disabled")
-    assert context.dialog.mapview.width() == context.dialog.width(), "webview width"
-    assert context.dialog.mapview.height() == context.dialog.height(), (
-        context.dialog.mapview.height(), context.dialog.height()
-    )
     assert evaluate("document.querySelector('#layer').selectedOptions[0].textContent") == "Test track", "layer"
-    assert evaluate("document.querySelector('#preview').src.includes('template.html')"), "preview URL"
+    assert evaluate("document.querySelector('#preview').src.includes('map.html')"), "preview URL"
     assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
     wait_until("!!document.querySelector('#preview').contentWindow.controlLayer")
     assert evaluate("""(() => {
@@ -213,15 +209,15 @@ def check_html_controls(context):
     assert context.dialog.settings["zFollow"] == 14 and context.dialog.settings["rotateMap"]
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
-      const opts = frame.contentWindow.opts;
-      return opts?.elevationControl.options.position === 'bottomleft'
-        && !opts.elevationControl.options.detached && opts.elevationControl.options.followMarker
-        && opts.elevationControl.options.autohide && opts.elevationControl.options.collapsed
-        && opts.elevationControl.options.slope && opts.elevationControl.options.imperial
-        && opts.elevationControl.options.interpolation === 'curveStep'
-        && opts.elevationControl.options.yAxisMax === 500
-        && opts.elevationControl.options.trkStart === false
-        && opts.layersControl.options.collapsed
+      const options = frame.contentWindow.controlElevation?.options;
+      return options?.position === 'bottomleft'
+        && !options.detached && options.followMarker
+        && options.autohide && options.collapsed
+        && options.slope && options.imperial
+        && options.interpolation === 'curveStep'
+        && options.yAxisMax === 500
+        && options.trkStart === false
+        && frame.contentWindow.controlLayer?.options.collapsed
         && frame.contentWindow.map.getSize().x === frame.clientWidth
         && !document.querySelector('#settings-panel').hidden
         && !frame.contentDocument.querySelector('[aria-label="Settings & export"]');
@@ -235,7 +231,7 @@ def check_html_controls(context):
     })()""")
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
-      return frame.contentWindow.opts?.elevationControl.options.detached
+      return frame.contentWindow.controlElevation?.options.detached
         && !!frame.contentDocument.querySelector('#elevation-div svg.background')
         && !!frame.contentDocument.querySelector('.custom-theme.elevation-control .area path.altitude')
         && !document.querySelector('#settings-panel').hidden
@@ -267,17 +263,35 @@ def check_html_controls(context):
     assert context.dialog.layer_combo.currentLayer() == other
     assert json.loads(context.dialog.config["data"])["name"] == "Other track"
 
-    evaluate("""(() => {
-      const input = document.querySelector('#terrain3D');
-      input.checked = true; input.dispatchEvent(new Event('change')); return true;
-    })()""")
-    wait_until("document.querySelector('[data-action=html]').disabled")
-    wait_until("!document.querySelector('[data-action=html]').disabled")
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web")
+    with patch.object(module.QtWidgets.QMessageBox, "question",
+                      return_value=module.QtWidgets.QMessageBox.StandardButton.No), \
+         patch.object(module.QDesktopServices, "openUrl") as open_url:
+        evaluate("""(() => {
+          const input = document.querySelector('#terrain3D');
+          input.checked = true; input.dispatchEvent(new Event('change')); return true;
+        })()""")
+        wait_until("!document.querySelector('#terrain3D').checked")
+        assert not context.dialog.settings["terrain3D"]
+        open_url.assert_not_called()
+    with patch.object(module.QtWidgets.QMessageBox, "question",
+                      return_value=module.QtWidgets.QMessageBox.StandardButton.Yes), \
+         patch.object(module.QDesktopServices, "openUrl", return_value=True):
+        evaluate("""(() => {
+          const input = document.querySelector('#terrain3D');
+          input.checked = true; input.dispatchEvent(new Event('change')); return true;
+        })()""")
+        wait_until("document.querySelector('[data-action=html]').disabled")
+        wait_until("!document.querySelector('[data-action=html]').disabled")
     assert context.dialog.settings["terrain3D"]
     path = str(Path(context.tempdir.name) / "track.html")
     with patch.object(QFileDialog, "getSaveFileName", return_value=(path, "*.html")):
         evaluate("document.querySelector('[data-action=html]').click(); true")
-        wait_until("document.querySelector('#layer').value !== ''")
+        deadline = time.monotonic() + 15
+        while not Path(path).exists() and time.monotonic() < deadline:
+            loop = QEventLoop()
+            QTimer.singleShot(100, loop.quit)
+            loop.exec()
     assert Path(path).exists(), "exported file"
     html = Path(path).read_text(encoding="utf-8")
     assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
@@ -327,8 +341,12 @@ def check_html_controls(context):
     wait_until("""(() => {
       const frame = document.querySelector('#preview');
       return frame.contentDocument.readyState === 'complete'
-        && frame.contentWindow.opts?.otmLayer.url === 'https://example.test/{z}/{x}/{y}.png';
+        && frame.contentWindow.baseLayers?.OTM._url === 'https://example.test/{z}/{x}/{y}.png';
     })()""")
+    context.dialog.mapview.reload()
+    wait_until("""document.querySelector('#terrain3D')?.checked
+      && document.querySelector('#profileColor')?.value === '#00ff00'
+      && !document.querySelector('[data-action=html]')?.disabled""")
 
 
 @then("the preview follows option and layer changes without refetching unchanged elevations")
@@ -361,7 +379,7 @@ def check_automatic_preview(context):
         module, "_layer_with_mapterhorn_elevations",
         wraps=module._layer_with_mapterhorn_elevations
     ) as drape:
-        context.dialog.show()
+        context.dialog._schedule_preview()
         wait_for_preview()
         assert drape.call_count == 1
         assert context.dialog._preview_status == "ready"
@@ -482,35 +500,108 @@ def check_plugin_actions(context):
     context.iface.removeToolBarIcon.assert_called_once()
 
 
-@then("the plugin opens the dialog maximized each time")
-def check_maximized_dialog(context):
-    from qgis.PyQt.QtCore import QTimer
-    from qgis.PyQt.QtWidgets import QApplication
-
+@then("the plugin opens the QGIS dialog each time")
+def check_dialog_launch(context):
     iface = MagicMock()
     iface.mainWindow.return_value = None
     plugin = importlib.import_module(ROOT.name).classFactory(iface)
     plugin.initGui()
-    states = []
-
-    def close_dialog():
-        states.append(plugin.dlg.isMaximized())
-        plugin.dlg.reject()
-
-    app = QApplication.instance()
-    quit_on_close = app.quitOnLastWindowClosed()
-    app.setQuitOnLastWindowClosed(False)
-    try:
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web")
+    with patch.object(module.QDesktopServices, "openUrl", return_value=True) as open_url:
         for _ in range(2):
-            QTimer.singleShot(100, close_dialog)
             plugin.run()
-            plugin.dlg.showNormal()
-    finally:
-        if hasattr(plugin, "dlg"):
+            assert plugin.dlg.isVisible() and plugin.dlg.isMaximized()
             plugin.dlg.hide()
-            plugin.dlg.preview_dir.cleanup()
-        app.setQuitOnLastWindowClosed(quit_on_close)
-    assert states == [True, True]
+        open_url.assert_not_called()
+    plugin.unload()
+
+
+@then("3D preview requires confirmation and returns to QGIS for 2D")
+def check_3d_preview_switch(context):
+    from qgis.PyQt.QtCore import QEventLoop, QTimer, QUrl
+    from qgis.PyQt.QtWebEngineWidgets import QWebEngineView
+
+    def wait_for_script(view, script):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            results = []
+            loop = QEventLoop()
+            view.page().runJavaScript(script, lambda value: (results.append(value), loop.quit()))
+            QTimer.singleShot(1000, loop.quit)
+            loop.exec()
+            if results and results[0]:
+                return
+            loop = QEventLoop()
+            QTimer.singleShot(100, loop.quit)
+            loop.exec()
+        raise AssertionError("Browser interface did not reach expected state: " + script)
+
+    module = importlib.import_module(ROOT.name + ".track_profile_2_web")
+    settings = dict(context.dialog.settings)
+    settings["terrain3D"] = True
+    buttons = module.QtWidgets.QMessageBox.StandardButton
+    with patch.object(module.QtWidgets.QMessageBox, "question", return_value=buttons.No), \
+         patch.object(module.QDesktopServices, "openUrl", return_value=True) as open_url:
+        context.dialog.bridge.setOptions(json.dumps(settings))
+        assert not context.dialog.settings["terrain3D"]
+        open_url.assert_not_called()
+    with patch.object(module.QtWidgets.QMessageBox, "question", return_value=buttons.Yes), \
+         patch.object(module.QDesktopServices, "openUrl", return_value=False):
+        context.dialog.bridge.setOptions(json.dumps(settings))
+        assert not context.dialog.settings["terrain3D"]
+        assert context.dialog.bar.currentItem() is not None
+    with patch.object(module.QtWidgets.QMessageBox, "question", return_value=buttons.Yes), \
+         patch.object(module.QDesktopServices, "openUrl", return_value=True) as open_url:
+        context.dialog.bridge.setOptions(json.dumps(settings))
+        assert context.dialog.settings["terrain3D"] and not context.dialog.isVisible()
+        assert open_url.call_args.args[0].toString() == context.dialog.server.base_url
+    browser = QWebEngineView()
+    try:
+        browser.setUrl(QUrl(context.dialog.server.base_url))
+        wait_for_script(browser, "document.querySelector('#terrain3D')?.checked && document.querySelector('#inactive')?.hidden")
+        wait_for_script(browser, """(() => {
+          const input = document.querySelector('#terrain3D');
+          input.checked = false; input.dispatchEvent(new Event('change')); return true;
+        })()""")
+        wait_for_script(browser, "document.querySelector('#inactive') && !document.querySelector('#inactive').hidden")
+        assert not context.dialog.settings["terrain3D"] and context.dialog.isVisible()
+        wait_for_script(context.dialog.mapview, "document.querySelector('#terrain3D') && !document.querySelector('#terrain3D').checked")
+    finally:
+        browser.close()
+        browser.deleteLater()
+
+
+@then("the preview server rejects unauthorized requests")
+def check_preview_server(context):
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+    from qgis.PyQt.QtCore import QEventLoop, QTimer
+
+    server = context.dialog.server
+    results = []
+    def request(url, headers=None, data=None):
+        try:
+            with urlopen(Request(url, headers=headers or {}, data=data), timeout=5) as response:
+                return response.status
+        except HTTPError as error:
+            return error.code
+    def probe():
+        results.extend([
+            request(server.base_url + "state"),
+            request(server.origin + "/wrong/state"),
+            request(server.base_url + "state", headers={"Host": "attacker.example"}),
+            request(server.base_url + "command", headers={"Origin": "https://attacker.example"},
+                    data=b'{"name":"retry"}'),
+        ])
+    thread = threading.Thread(target=probe)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while thread.is_alive() and time.monotonic() < deadline:
+        loop = QEventLoop()
+        QTimer.singleShot(50, loop.quit)
+        loop.exec()
+    thread.join(timeout=1)
+    assert results == [200, 404, 403, 404], results
 
 
 @then("the preview contains the line coordinates and elevations")
@@ -677,19 +768,27 @@ def customized_profile(context):
 
 
 @given("an elevation profile with 3D terrain")
-def terrain_profile(context):
+def terrain_profile(context, rotation=True):
     prepare_web_profile(context, False, overrides={
-        "terrain3D": True, "rotateMap": True, "distanceMarkers": True, "hotline": True,
+        "terrain3D": True, "rotateMap": rotation, "distanceMarkers": True, "hotline": True,
         "basemapUrl": "https://example.test/tiles/{z}/{x}/{y}.png",
     })
     path = Path(context.tempdir.name) / "profile.html"
     html = path.read_text(encoding="utf-8").replace(
+        "async getTile(z, x, y, signal) {",
+        "getTile: window.testTerrainTile = async function(z, x, y, signal) {",
+    ).replace(
         "terrainLayer.addTo(map);",
         "map.on('terrainchange', () => window.terrainChanges = (window.terrainChanges || 0) + 1);"
         "terrainLayer.addTo(map);",
     )
     path.write_text(html, encoding="utf-8")
     context.terrain_profile = True
+
+
+@given("an elevation profile with 3D terrain and rotation disabled")
+def terrain_without_rotation(context):
+    terrain_profile(context, rotation=False)
 
 
 @given("an elevation profile with 3D terrain but no WebGPU")
@@ -702,6 +801,12 @@ def terrain_without_gpu(context):
 def terrain_with_missing_tiles(context):
     terrain_profile(context)
     context.missing_terrain = True
+
+
+@given("an elevation profile with an unavailable rotation library")
+def profile_with_missing_rotation(context):
+    prepare_web_profile(context, False, overrides={"rotateMap": True})
+    context.missing_rotation = True
 
 
 @when("I open the profile in a browser")
@@ -717,6 +822,9 @@ def open_profile(context):
     context.page = context.browser.new_page(ignore_https_errors=True)
     if getattr(context, "no_gpu", False):
         context.page.add_init_script("Object.defineProperty(navigator, 'gpu', {value: undefined})")
+    if getattr(context, "missing_rotation", False):
+        context.page.route("https://unpkg.com/leaflet-rotate@*/dist/leaflet-rotate.js",
+                           lambda route: route.abort())
     if getattr(context, "terrain_profile", False):
         def chunk(name, data):
             payload = name + data
@@ -737,6 +845,12 @@ def open_profile(context):
             headers={"Access-Control-Allow-Origin": "*"}
         ))
     context.page.goto("http://127.0.0.1:{}/profile.html".format(context.server.server_port))
+
+
+@when("I open the profile as a local file")
+def open_local_profile(context):
+    open_profile(context)
+    context.page.goto((Path(context.tempdir.name) / "profile.html").as_uri())
 
 
 @then("the chart and its elevation summary are displayed")
@@ -848,7 +962,7 @@ def check_terrain(context):
     page.wait_for_function("""() => controlElevation._hotline.getLayers().length &&
       controlElevation._layers.getLayers().some(layer => layer instanceof L.Polyline)""", timeout=30000)
     result = page.evaluate("""async () => {
-      const heights = await terrainTile(10, 500, 300, new AbortController().signal);
+      const heights = await window.testTerrainTile(10, 500, 300, new AbortController().signal);
       map.setBearing(30);
       return {length: heights.length, first: heights[0], last: heights[255],
         pitch: map.getPitch(), bearing: map.getBearing(), rotation: !!map.options.rotateControl,
@@ -859,6 +973,22 @@ def check_terrain(context):
     assert result == {"length": 65536, "first": 100, "last": 356, "pitch": 45,
                       "bearing": 30, "rotation": True, "track": True,
                       "rotateScript": False, "warning": ""}, result
+
+
+@then("mouse dragging does not rotate the 3D map")
+def check_terrain_rotation_disabled(context):
+    page = context.page
+    if not page.evaluate("async () => !!(await navigator.gpu?.requestAdapter())"):
+        context.scenario.skip("WebGPU is unavailable in this browser")
+        return
+    page.wait_for_selector("canvas.leaflet-3d", timeout=30000)
+    bounds = page.locator("#map").bounding_box()
+    x, y = bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down(button="right")
+    page.mouse.move(x + 80, y, steps=4)
+    page.mouse.up(button="right")
+    assert page.evaluate("map.getBearing()") == 0
 
 
 @then("the map falls back to 2D with a warning")
@@ -880,3 +1010,11 @@ def check_terrain_error(context):
         return
     page.wait_for_function("document.querySelector('#map-warning').textContent.includes('Mapterhorn: HTTP 500')",
                            timeout=30000)
+
+
+@then("the map reports the loading error")
+def check_map_loading_error(context):
+    context.page.wait_for_function(
+        "document.querySelector('#map-warning').textContent.includes('Could not load the map:')",
+        timeout=30000
+    )

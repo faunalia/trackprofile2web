@@ -38,8 +38,10 @@ def after_scenario(context, scenario):
         context.server.server_close()
         context.server_thread.join()
     if hasattr(context, "dialog"):
+        context.dialog.mapview.close()
+        context.dialog.mapview.deleteLater()
+        context.dialog.shutdown()
         context.dialog.close()
-        context.dialog.preview_dir.cleanup()
         from qgis.core import QgsProject
         QgsProject.instance().clear()
     context.tempdir.cleanup()

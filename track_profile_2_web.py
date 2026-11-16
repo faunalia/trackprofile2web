@@ -28,12 +28,12 @@ import json
 import tempfile
 import re
 import math
+import secrets
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtWebEngineCore import QWebEngineSettings
 from qgis.PyQt.QtWebEngineWidgets import QWebEngineView
 from qgis.PyQt.QtCore import (
     QUrl,
@@ -47,9 +47,9 @@ from qgis.PyQt.QtCore import (
     pyqtSignal,
     pyqtSlot
 )
-from qgis.PyQt.QtWebChannel import QWebChannel
+from qgis.PyQt.QtNetwork import QHostAddress, QTcpServer
 
-from qgis.PyQt.QtGui import QAction, QIcon, QImage
+from qgis.PyQt.QtGui import QAction, QDesktopServices, QIcon, QImage
 from qgis.PyQt.QtWidgets import (
     QFileDialog
 )
@@ -204,6 +204,7 @@ class PreviewBridge(QObject):
             "layers": [{"id": layer.id(), "name": layer.name()} for layer in layers if layer],
             "layer": selected.id() if selected else "",
             "preview": dialog._preview_url,
+            "settings": dialog.settings,
             "ready": dialog._preview_status == "ready",
             "status": dialog._preview_status,
             "message": {
@@ -281,8 +282,16 @@ class PreviewBridge(QObject):
             )
             return
         if settings != self.dialog.settings:
+            was_3d = bool(self.dialog.settings and self.dialog.settings["terrain3D"])
+            if settings["terrain3D"] and not was_3d and not self.dialog.open_3d_preview():
+                return
             self.dialog.settings = settings
             self.dialog._schedule_preview()
+            if settings["terrain3D"] and not was_3d:
+                self.dialog.hide()
+            elif was_3d and not settings["terrain3D"]:
+                self.dialog.showMaximized()
+                self.dialog.mapview.reload()
 
     @pyqtSlot(str)
     def action(self, action):
@@ -299,26 +308,135 @@ class PreviewBridge(QObject):
             )
 
 
+class PreviewServer(QObject):
+    def __init__(self, dialog, panel):
+        super().__init__(dialog)
+        self.dialog = dialog
+        self.panel = panel.encode('utf-8')
+        self.token = secrets.token_urlsafe(32)
+        self.server = QTcpServer(self)
+        self.server.newConnection.connect(self.accept)
+        if not self.server.listen(QHostAddress(QHostAddress.SpecialAddress.LocalHost), 0):
+            raise RuntimeError("Could not start the local preview server: " + self.server.errorString())
+        self.origin = 'http://127.0.0.1:{}'.format(self.server.serverPort())
+        self.base_url = '{}/{}/'.format(self.origin, self.token)
+        self.buffers = {}
+
+    def accept(self):
+        while self.server.hasPendingConnections():
+            socket = self.server.nextPendingConnection()
+            if len(self.buffers) >= 32:
+                socket.abort()
+                socket.deleteLater()
+                continue
+            self.buffers[socket] = bytearray()
+            socket.request_timer = QTimer(socket)
+            socket.request_timer.setSingleShot(True)
+            socket.request_timer.timeout.connect(socket.abort)
+            socket.request_timer.start(10000)
+            socket.readyRead.connect(lambda s=socket: self.read(s))
+            socket.disconnected.connect(lambda s=socket: self.discard(s))
+
+    def discard(self, socket):
+        self.buffers.pop(socket, None)
+        socket.deleteLater()
+
+    def respond(self, socket, status, content_type, body):
+        headers = (
+            'HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n'
+            'Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n'
+            'X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n'
+        ).format(status, content_type, len(body)).encode('ascii')
+        socket.write(headers + body)
+        socket.disconnectFromHost()
+
+    def read(self, socket):
+        data = self.buffers.get(socket)
+        if data is None:
+            return
+        data.extend(bytes(socket.readAll()))
+        if len(data) > 131072:
+            self.respond(socket, '413 Payload Too Large', 'text/plain', b'Request too large')
+            return
+        header_end = data.find(b'\r\n\r\n')
+        if header_end < 0:
+            return
+        try:
+            lines = bytes(data[:header_end]).decode('iso-8859-1').split('\r\n')
+            method, path, version = lines[0].split(' ')
+            headers = {}
+            for line in lines[1:]:
+                name, value = line.split(':', 1)
+                name = name.lower()
+                if name in headers:
+                    raise ValueError('Duplicate header')
+                headers[name] = value.strip()
+            length = int(headers.get('content-length', '0'))
+            if length < 0 or length > 65536 or version not in ('HTTP/1.0', 'HTTP/1.1'):
+                raise ValueError('Invalid request')
+        except ValueError:
+            self.respond(socket, '400 Bad Request', 'text/plain', b'Invalid request')
+            return
+        if len(data) < header_end + 4 + length:
+            return
+        socket.request_timer.stop()
+        self.buffers[socket] = None
+        if headers.get('host') != self.origin.removeprefix('http://'):
+            self.respond(socket, '403 Forbidden', 'text/plain', b'Forbidden')
+            return
+        path = path.split('?', 1)[0]
+        prefix = '/' + self.token + '/'
+        if not path.startswith(prefix):
+            self.respond(socket, '404 Not Found', 'text/plain', b'Not found')
+            return
+        route = path[len(prefix):]
+        if method == 'GET' and route == '':
+            self.respond(socket, '200 OK', 'text/html; charset=utf-8', self.panel)
+        elif method == 'GET' and route == 'state':
+            self.respond(socket, '200 OK', 'application/json', self.dialog.bridge.state().encode('utf-8'))
+        elif method == 'GET' and route == 'map.html' and self.dialog._preview_url:
+            try:
+                with open(self.dialog.fout, 'rb') as preview:
+                    body = preview.read()
+            except OSError as error:
+                self.respond(socket, '500 Internal Server Error', 'text/plain',
+                             ('Could not read the preview: ' + str(error)).encode('utf-8'))
+                return
+            self.respond(socket, '200 OK', 'text/html; charset=utf-8', body)
+        elif method == 'POST' and route == 'command' and headers.get('origin') == self.origin:
+            try:
+                command = json.loads(bytes(data[header_end + 4:header_end + 4 + length]))
+                name, value = command['name'], command.get('value', '')
+                if name not in ('setOptions', 'selectLayer', 'retry', 'action') or not isinstance(value, str):
+                    raise ValueError('Invalid command')
+            except (ValueError, KeyError, TypeError):
+                self.respond(socket, '400 Bad Request', 'text/plain', b'Invalid command')
+                return
+            if name == 'retry':
+                self.dialog.bridge.retry()
+            else:
+                getattr(self.dialog.bridge, name)(value)
+            self.respond(socket, '200 OK', 'application/json', b'{}')
+        else:
+            self.respond(socket, '404 Not Found', 'text/plain', b'Not found')
+
+
 class TrackProfile2webDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         """Constructor."""
         super(TrackProfile2webDialog, self).__init__(parent)
         self.setWindowTitle(self.tr("Leaflet Elevation"))
         self.resize(948, 591)
-        self.preview_dir = tempfile.TemporaryDirectory(prefix='trackprofile2web-')
         self.mapview = QWebEngineView(self)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.mapview)
-
+        self.preview_dir = tempfile.TemporaryDirectory(prefix='trackprofile2web-')
+        self._closed = False
         # filter only QgsVector Line Layers
         self.layer_combo = QgsMapLayerComboBox(self)
         self.layer_combo.hide()
         self.layer_combo.setFilters(Qgis.LayerFilter.LineLayer)
-
-        # Local previews need access to the remote JavaScript and tiles.
-        mapview_settings = self.mapview.settings()
-        mapview_settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
         # create instance of QgsMessageBar (used later)
         self.bar = QgsMessageBar(self)
@@ -330,9 +448,6 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
         self._preview_url = ""
         self._preview_status = "empty"
         self.bridge = PreviewBridge(self)
-        self.channel = QWebChannel(self.mapview.page())
-        self.channel.registerObject("bridge", self.bridge)
-        self.mapview.page().setWebChannel(self.channel)
         self.bar.widgetAdded.connect(self.bridge.stateChanged)
         self.bar.widgetRemoved.connect(self.bridge.stateChanged)
         self._preview_timer = QTimer(self)
@@ -348,15 +463,43 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
             before, preview = template_file.read().split('<template id="qgis-preview">', 1)
             preview, after = preview.split('</template>', 1)
         self.map_template = before + after
-        self.mapview.setHtml('<!DOCTYPE html>\n' + preview, QUrl.fromLocalFile(template_path))
+        self.server = PreviewServer(self, '<!DOCTYPE html>\n' + preview)
+        self._preview_revision = 0
+        self.mapview.setUrl(QUrl(self.server.base_url + '?embedded=1'))
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._schedule_preview()
+    def open_3d_preview(self):
+        answer = QtWidgets.QMessageBox.question(
+            self, self.tr("Open 3D preview in browser"),
+            self.tr(
+                "3D terrain requires WebGPU, which may not be available in QGIS.\n\n"
+                "Open the preview in your default browser? Keep QGIS open to change "
+                "settings and export the map."
+            ),
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return False
+        if not QDesktopServices.openUrl(QUrl(self.server.base_url)):
+            self.bar.pushMessage(
+                self.tr("Could not open the default browser."),
+                level=Qgis.MessageLevel.Critical, duration=15
+            )
+            return False
+        return True
 
-    def hideEvent(self, event):
+    def shutdown(self):
+        if self._closed:
+            return
+        self._closed = True
         self._preview_timer.stop()
-        super().hideEvent(event)
+        self._set_source_layer(None)
+        QgsProject.instance().layersAdded.disconnect(self.bridge.stateChanged)
+        QgsProject.instance().layersRemoved.disconnect(self.bridge.stateChanged)
+        self.server.server.close()
+        for socket in list(self.server.buffers):
+            socket.abort()
+        self.preview_dir.cleanup()
 
     def _set_source_layer(self, layer):
         signals = ('dataChanged', 'geometryChanged', 'featureAdded', 'featureDeleted',
@@ -380,9 +523,11 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
         self._schedule_preview()
 
     def _schedule_preview(self, *args):
+        if self._closed:
+            return
         self._preview_status = "updating" if self.layer_combo.currentLayer() else "empty"
         self.bridge.stateChanged.emit()
-        if self.isVisible() and self.settings is not None:
+        if self.settings is not None:
             self._preview_timer.start()
 
     def changeMap(self):
@@ -465,7 +610,8 @@ class TrackProfile2webDialog(QtWidgets.QDialog):
             ))
 
         # get the path of the output file as QUrl
-        self._preview_url = QUrl.fromLocalFile(self.fout).toString()
+        self._preview_revision += 1
+        self._preview_url = self.server.base_url + 'map.html?revision=' + str(self._preview_revision)
         self.bridge.previewChanged.emit(self._preview_url)
         self._preview_status = "ready"
         self.bridge.stateChanged.emit()
@@ -582,11 +728,22 @@ class TrackProfile2web:
                 self.tr(u'&Track Profile to Web'),
                 action)
             self.iface.removeToolBarIcon(action)
+        if hasattr(self, 'dlg'):
+            self.dlg.shutdown()
+            self.dlg.deleteLater()
 
     def run(self):
         """Run method that performs all the real work."""
         if self.first_start == True:
+            try:
+                self.dlg = TrackProfile2webDialog()
+            except (OSError, RuntimeError) as error:
+                self.iface.messageBar().pushCritical(
+                    self.tr("Track Profile to Web"), str(error)
+                )
+                return
             self.first_start = False
-            self.dlg = TrackProfile2webDialog()
-        self.dlg.showMaximized()
-        self.dlg.exec()
+        if self.dlg.settings and self.dlg.settings["terrain3D"]:
+            self.dlg.open_3d_preview()
+        else:
+            self.dlg.showMaximized()

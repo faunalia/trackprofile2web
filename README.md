@@ -1,13 +1,13 @@
 # QGIS TrackProfile2Web Plugin
 
-Requires QGIS 4 with Qt WebEngine. The preview and exported pages load
+Requires QGIS 4 with Qt WebEngine and a browser. The preview and exported pages load
 Leaflet and leaflet-elevation 3.0.1 from a CDN, so they require internet access.
 Map rotation and 3D terrain load additional libraries only when needed.
 When exporting HTML and GeoJSON separately, serve both files over HTTP(S);
 opening the HTML directly as a local file may block the GeoJSON request.
 
-This plugin allows you to select a line layer and to create an
-interactive elevation profile embedded within QGIS itself:
+This plugin allows you to select a line layer and create an
+interactive elevation profile:
 
 ![preview](img1.png)
 
@@ -20,12 +20,20 @@ The workflow is very simple:
 
 1. select a **line** layer loaded in QGIS and choose a base map in the settings sidebar
 2. optionally change the appearance or profile settings
-3. the preview updates automatically. Navigate in the map and hover the mouse on the profile to
+3. the preview updates automatically in QGIS. Navigate in the map and hover the mouse on the profile to
    see the position on the map
 
 If you want you can export the map as a single `html` file or as `html` +
-`geojson`. The settings panel is only shown inside QGIS and is not included in
+`geojson`, using QGIS's save dialogs. The settings panel is not included in
 the exported page. The results can be easily embedded in a web page.
+
+When 3D terrain is enabled, confirm opening the preview in the default browser
+and keep QGIS open. Disabling 3D returns the preview to QGIS; the browser tab
+can then be closed. The map rotation setting applies to both views.
+
+The preview uses a temporary local server bound to `127.0.0.1` with a
+session-specific address. It stops when the plugin is unloaded or QGIS closes.
+Keep the preview address private while QGIS is running.
 
 The settings interface, map configuration and styles are defined in
 `track_profile_2_web.html`; `track_profile_2_web.py` handles QGIS integration and exports.

@@ -93,102 +93,8 @@
     &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span><span id="slope-summary" hidden>
     &mdash; <span class="ascent">Ascent: <span class="summaryvalue">0</span></span> &mdash; <span class="descent">Descent: <span class="summaryvalue">0</span></span></span></div>
 
-  <script>
-    const config = window.config = '{ py_opts }';
-    const settings = window.settings = config.settings;
-    const opts = window.opts = {
-      map: {
-        center: [41.4583, 12.7059],
-        zoom: 5,
-        markerZoomAnimation: false,
-        zoomControl: false,
-        rotate: settings.distanceMarkers || settings.rotateMap,
-        rotateControl: false,
-        touchRotate: false,
-        shiftKeyRotate: false
-      },
-      zoomControl: {
-        position: 'topleft'
-      },
-      elevationControl: {
-        data: config.data,
-        options: {
-          position: settings.position,
-          theme: 'custom-theme',
-          collapsed: settings.collapseProfile,
-          detached: settings.detached,
-          elevationDiv: '#elevation-div',
-          followMarker: settings.follow,
-          autohide: settings.autohide,
-          autohideMarker: settings.autohideMarker,
-          marker: settings.marker,
-          slope: settings.slope,
-          imperial: settings.imperial,
-          hotline: settings.hotline ? 'elevation' : false,
-          distanceMarkers: settings.distanceMarkers,
-          edgeScale: settings.edgeScale,
-          legend: settings.legend,
-          ruler: settings.ruler,
-          autofitBounds: settings.autofitBounds,
-          interpolation: settings.interpolation,
-          summary: false,
-          downloadLink: false
-        }
-      },
-      layersControl: {
-        options: {
-          collapsed: settings.collapseLayers
-        }
-      },
-      otmLayer: {
-        url: settings.basemapUrl,
-        options: {
-          attribution: settings.basemapAttribution
-        }
-      }
-    };
-    document.documentElement.style.setProperty('--profile-color', settings.profileColor);
-    document.documentElement.style.setProperty('--profile-width', settings.profileWidth);
-    document.documentElement.style.setProperty('--marker-color', settings.markerColor);
-    document.documentElement.style.setProperty('--line-color', settings.lineColor);
-    document.documentElement.style.setProperty('--line-opacity', settings.hotline ? 0 : settings.markerOpacity);
-
-    const elevationOptions = window.elevationOptions = opts.elevationControl.options;
-    if (settings.distanceMarkers && settings.imperial) {
-      elevationOptions.distanceMarkers = {
-        lazy: true, distance: true, direction: true, offset: 804.672,
-        textFunction: distance => (distance / 1609.344).toFixed(0)
-      };
-    }
-    if (!settings.trackEndpoints) {
-      elevationOptions.trkStart = false;
-      elevationOptions.trkEnd = false;
-    }
-    for (const key of ['width', 'height', 'xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax',
-                       'xTicks', 'yTicks', 'decimalsX', 'decimalsY', 'zFollow']) {
-      if (settings[key] != null) elevationOptions[key] = settings[key];
-    }
-    for (const key of ['dragging', 'zooming']) {
-      if (settings[key] !== 'auto') elevationOptions[key] = settings[key] === 'enabled';
-    }
-    elevationOptions.forceAxisBounds = ['xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']
-      .some(key => settings[key] != null);
-    if (settings.detached && settings.width != null) {
-      document.getElementById('elevation-div').style.width = `min(100%, ${settings.width}px)`;
-    }
-    if (settings.slope && settings.imperial) {
-      // leaflet-elevation 3.0.1 computes slope from feet and miles without converting units.
-      elevationOptions.handlers = ['Distance', 'Time', 'Altitude',
-        import('https://unpkg.com/@raruto/leaflet-elevation@3.0.1/src/handlers/slope.js')
-          .then(({Slope}) => ({SlopeInImperial: function() {
-            const handler = Slope.call(this);
-            const calculate = handler.pointToAttr;
-            handler.pointToAttr = (...args) => calculate(...args) * 0.621371 / 3.28084;
-            return handler;
-          }})),
-        'Speed', 'Acceleration'];
-    }
-
+  <script type="module">
+    const {data, settings} = '{ py_opts }';
     function showMapWarning(message) {
       const notice = document.getElementById('map-warning');
       notice.textContent = message;
@@ -196,134 +102,188 @@
       console.error(message);
     }
 
-    function loadMapScript(url) {
-      return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = url;
-        script.onload = resolve;
-        script.onerror = () => reject(new Error('Could not load ' + url));
-        document.head.appendChild(script);
-      });
-    }
-
-    async function terrainTile(z, x, y, signal) {
-      for (let sourceZoom = Math.min(17, z); sourceZoom >= 0; sourceZoom--) {
-        const factor = 2 ** (z - sourceZoom);
-        const url = `https://tiles.mapterhorn.com/${sourceZoom}/${Math.floor(x / factor)}/${Math.floor(y / factor)}.webp`;
-        const response = await fetch(url, {signal});
-        if (response.status === 404) continue;
-        if (!response.ok) throw new Error(`Mapterhorn: HTTP ${response.status}`);
-        const image = await createImageBitmap(await response.blob());
+    try {
+      let terrain = settings.terrain3D;
+      if (terrain) {
         try {
-          if (image.width !== 512 || image.height !== 512) throw new Error('Invalid Mapterhorn tile');
-          const canvas = document.createElement('canvas');
-          canvas.width = canvas.height = 512;
-          const context = canvas.getContext('2d', {willReadFrequently: true});
-          context.drawImage(image, 0, 0);
-          const pixels = context.getImageData(0, 0, 512, 512).data;
-          const heights = new Float32Array(256 * 256);
-          for (let row = 0; row < 256; row++) {
-            for (let column = 0; column < 256; column++) {
-              const px = Math.floor(((x % factor) + (column + 0.5) / 256) * 512 / factor);
-              const py = Math.floor(((y % factor) + (row + 0.5) / 256) * 512 / factor);
-              const index = (py * 512 + px) * 4;
-              if (!pixels[index + 3]) throw new Error('Missing Mapterhorn elevation data');
-              heights[row * 256 + column] = pixels[index] * 256 + pixels[index + 1] + pixels[index + 2] / 256 - 32768;
-            }
+          const adapter = await navigator.gpu?.requestAdapter();
+          if (!adapter) throw new Error('WebGPU is unavailable');
+          const device = await adapter.requestDevice();
+          const context = document.createElement('canvas').getContext('webgpu');
+          if (!context) {
+            device.destroy();
+            throw new Error('WebGPU canvas is unavailable');
           }
-          return heights;
-        } finally {
-          image.close();
-        }
-      }
-      throw new Error('No Mapterhorn elevation tile available');
-    }
-
-    async function startMap() {
-    let terrain = settings.terrain3D;
-    if (terrain) {
-      try {
-        const adapter = await navigator.gpu?.requestAdapter();
-        if (!adapter) throw new Error('WebGPU is unavailable');
-        const device = await adapter.requestDevice();
-        const context = document.createElement('canvas').getContext('webgpu');
-        if (!context) {
           device.destroy();
-          throw new Error('WebGPU canvas is unavailable');
+          await import('https://unpkg.com/leaflet-city-mapper@0.1.1/dist/leaflet-city-mapper.js');
+        } catch (error) {
+          showMapWarning('3D terrain unavailable; using 2D map. ' + error.message);
+          terrain = false;
         }
-        device.destroy();
-        await loadMapScript('https://unpkg.com/leaflet-city-mapper@0.1.1/dist/leaflet-city-mapper.js');
-      } catch (error) {
-        showMapWarning('3D terrain unavailable; using 2D map. ' + error.message);
-        terrain = false;
       }
-    }
-    if (!terrain && (settings.rotateMap || settings.distanceMarkers)) {
-      await loadMapScript('https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js');
-    }
-    opts.map.rotate = terrain || settings.rotateMap || settings.distanceMarkers;
-    opts.map.rotateControl = settings.rotateMap ? {closeOnZeroBearing: false} : false;
-    opts.map.touchRotate = settings.rotateMap;
-    opts.map.shiftKeyRotate = settings.rotateMap;
-    if (terrain) {
-      opts.map.pitch = 45;
-      opts.map.touchPitch = true;
-      opts.otmLayer.options.crossOrigin = true;
-    }
-
-    document.body.classList.toggle('attached-profile', !opts.elevationControl.options.detached);
-    const map = window.map = new L.Map('map', opts.map);
-    map.attributionControl.addAttribution('Powered by <a href="https://github.com/Raruto/leaflet-elevation">Raruto</a>');
-
-    const baseLayers = window.baseLayers = {};
-    baseLayers.OTM = new L.TileLayer(opts.otmLayer.url, opts.otmLayer.options);
-    if (terrain) baseLayers.OTM.on('tileerror', () =>
-      showMapWarning('3D base map tile failed to load. Check the URL and CORS permissions.'));
-
-    if (terrain) {
-      const terrainLayer = new L.Layer({
-        source: {type: 'terrain', getTile: terrainTile},
-        attribution: 'Elevation: <a href="https://mapterhorn.com/attribution">&copy; Mapterhorn</a>'
+      if (!terrain && (settings.rotateMap || settings.distanceMarkers)) {
+        await import('https://unpkg.com/leaflet-rotate@0.6.2/dist/leaflet-rotate.js');
+      }
+      document.documentElement.style.setProperty('--profile-color', settings.profileColor);
+      document.documentElement.style.setProperty('--profile-width', settings.profileWidth);
+      document.documentElement.style.setProperty('--marker-color', settings.markerColor);
+      document.documentElement.style.setProperty('--line-color', settings.lineColor);
+      document.documentElement.style.setProperty('--line-opacity', settings.hotline ? 0 : settings.markerOpacity);
+      if (settings.detached && settings.width != null) {
+        document.getElementById('elevation-div').style.width = `min(100%, ${settings.width}px)`;
+      }
+      document.body.classList.toggle('attached-profile', !settings.detached);
+      const map = window.map = new L.Map('map', {
+        center: [41.4583, 12.7059],
+        zoom: 5,
+        markerZoomAnimation: false,
+        zoomControl: false,
+        rotate: terrain || settings.rotateMap || settings.distanceMarkers,
+        rotateControl: settings.rotateMap ? {closeOnZeroBearing: false} : false,
+        touchRotate: settings.rotateMap,
+        shiftKeyRotate: settings.rotateMap,
+        ...(terrain ? {pitch: 45, pitchDrag: settings.rotateMap, touchPitch: true} : {})
       });
-      terrainLayer.on('error', event => showMapWarning('3D terrain error: ' + event.error.message));
-      terrainLayer.addTo(map);
-    }
-    const controlZoom = window.controlZoom = new L.Control.Zoom(opts.zoomControl);
-    const controlElevation = window.controlElevation = L.control.elevation(opts.elevationControl.options).addTo(map);
-    const controlLayer = window.controlLayer = L.control.layers(baseLayers, null, opts.layersControl.options);
+      map.attributionControl.addAttribution('Powered by <a href="https://github.com/Raruto/leaflet-elevation">Raruto</a>');
 
-    controlZoom.addTo(map);
-    controlLayer.addTo(map);
+      const baseLayers = window.baseLayers = {
+        OTM: new L.TileLayer(settings.basemapUrl, {
+          attribution: settings.basemapAttribution,
+          ...(terrain ? {crossOrigin: true} : {})
+        })
+      };
+      if (terrain) baseLayers.OTM.on('tileerror', () =>
+        showMapWarning('3D base map tile failed to load. Check the URL and CORS permissions.'));
 
-    map.addLayer(baseLayers.OTM);
-
-    controlElevation.on('eledata_loaded', function(e) {
-      const q = document.querySelector.bind(document);
-      const track = e.track_info;
-
-      controlLayer.addOverlay(e.layer, e.name);
-
-      const distanceUnit = settings.imperial ? ' mi' : ' km';
-      const heightUnit = settings.imperial ? ' ft' : ' m';
-      q('.totlen .summaryvalue').textContent = track.distance.toFixed(2) + distanceUnit;
-      q('.maxele .summaryvalue').textContent = track.elevation_max.toFixed(2) + heightUnit;
-      q('.minele .summaryvalue').textContent = track.elevation_min.toFixed(2) + heightUnit;
-      if (settings.slope) {
-        q('#slope-summary').hidden = false;
-        q('.ascent .summaryvalue').textContent = (track.ascent || 0).toFixed(2) + heightUnit;
-        q('.descent .summaryvalue').textContent = (track.descent || 0).toFixed(2) + heightUnit;
+      if (terrain) {
+        const terrainLayer = new L.Layer({
+          source: {
+            type: 'terrain',
+            async getTile(z, x, y, signal) {
+              for (let sourceZoom = Math.min(17, z); sourceZoom >= 0; sourceZoom--) {
+                const factor = 2 ** (z - sourceZoom);
+                const url = `https://tiles.mapterhorn.com/${sourceZoom}/${Math.floor(x / factor)}/${Math.floor(y / factor)}.webp`;
+                const response = await fetch(url, {signal});
+                if (response.status === 404) continue;
+                if (!response.ok) throw new Error(`Mapterhorn: HTTP ${response.status}`);
+                const image = await createImageBitmap(await response.blob());
+                try {
+                  if (image.width !== 512 || image.height !== 512) throw new Error('Invalid Mapterhorn tile');
+                  const canvas = document.createElement('canvas');
+                  canvas.width = canvas.height = 512;
+                  const context = canvas.getContext('2d', {willReadFrequently: true});
+                  context.drawImage(image, 0, 0);
+                  const pixels = context.getImageData(0, 0, 512, 512).data;
+                  const heights = new Float32Array(256 * 256);
+                  for (let row = 0; row < 256; row++) {
+                    for (let column = 0; column < 256; column++) {
+                      const px = Math.floor(((x % factor) + (column + 0.5) / 256) * 512 / factor);
+                      const py = Math.floor(((y % factor) + (row + 0.5) / 256) * 512 / factor);
+                      const index = (py * 512 + px) * 4;
+                      if (!pixels[index + 3]) throw new Error('Missing Mapterhorn elevation data');
+                      heights[row * 256 + column] = pixels[index] * 256 + pixels[index + 1] + pixels[index + 2] / 256 - 32768;
+                    }
+                  }
+                  return heights;
+                } finally {
+                  image.close();
+                }
+              }
+              throw new Error('No Mapterhorn elevation tile available');
+            }
+          },
+          attribution: 'Elevation: <a href="https://mapterhorn.com/attribution">&copy; Mapterhorn</a>'
+        });
+        terrainLayer.on('error', event => showMapWarning('3D terrain error: ' + event.error.message));
+        terrainLayer.addTo(map);
       }
-    });
+      const controlZoom = window.controlZoom = new L.Control.Zoom({position: 'topleft'});
+      const controlElevation = window.controlElevation = L.control.elevation({
+        position: settings.position,
+        theme: 'custom-theme',
+        collapsed: settings.collapseProfile,
+        detached: settings.detached,
+        elevationDiv: '#elevation-div',
+        followMarker: settings.follow,
+        autohide: settings.autohide,
+        autohideMarker: settings.autohideMarker,
+        marker: settings.marker,
+        slope: settings.slope,
+        imperial: settings.imperial,
+        hotline: settings.hotline ? 'elevation' : false,
+        distanceMarkers: settings.distanceMarkers && settings.imperial ? {
+          lazy: true,
+          distance: true,
+          direction: true,
+          offset: 804.672,
+          textFunction: distance => (distance / 1609.344).toFixed(0)
+        } : settings.distanceMarkers,
+        edgeScale: settings.edgeScale,
+        legend: settings.legend,
+        ruler: settings.ruler,
+        autofitBounds: settings.autofitBounds,
+        interpolation: settings.interpolation,
+        summary: false,
+        downloadLink: false,
+        ...(!settings.trackEndpoints ? {trkStart: false, trkEnd: false} : {}),
+        ...Object.fromEntries(
+          ['width', 'height', 'xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax',
+           'xTicks', 'yTicks', 'decimalsX', 'decimalsY', 'zFollow']
+            .filter(key => settings[key] != null).map(key => [key, settings[key]])
+        ),
+        ...Object.fromEntries(
+          ['dragging', 'zooming'].filter(key => settings[key] !== 'auto')
+            .map(key => [key, settings[key] === 'enabled'])
+        ),
+        forceAxisBounds: ['xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']
+          .some(key => settings[key] != null),
+        // HOTFIX for leaflet-elevation 3.0.1 (computes slope from feet and miles without converting units).
+        ...(settings.slope && settings.imperial ? {handlers: [
+          'Distance', 'Time', 'Altitude',
+          import('https://unpkg.com/@raruto/leaflet-elevation@3.0.1/src/handlers/slope.js')
+            .then(({Slope}) => ({SlopeInImperial: function() {
+              const handler = Slope.call(this);
+              const calculate = handler.pointToAttr;
+              handler.pointToAttr = (...args) => calculate(...args) * 0.621371 / 3.28084;
+              return handler;
+            }})),
+          'Speed', 'Acceleration'
+        ]} : {})
+      }).addTo(map);
+      const controlLayer = window.controlLayer = L.control.layers(baseLayers, null, {collapsed: settings.collapseLayers});
 
-    controlElevation.load(opts.elevationControl.data);
+      controlZoom.addTo(map);
+      controlLayer.addTo(map);
+
+      map.addLayer(baseLayers.OTM);
+
+      controlElevation.on('eledata_loaded', function(e) {
+        const q = document.querySelector.bind(document);
+        const track = e.track_info;
+
+        controlLayer.addOverlay(e.layer, e.name);
+
+        const distanceUnit = settings.imperial ? ' mi' : ' km';
+        const heightUnit = settings.imperial ? ' ft' : ' m';
+        q('.totlen .summaryvalue').textContent = track.distance.toFixed(2) + distanceUnit;
+        q('.maxele .summaryvalue').textContent = track.elevation_max.toFixed(2) + heightUnit;
+        q('.minele .summaryvalue').textContent = track.elevation_min.toFixed(2) + heightUnit;
+        if (settings.slope) {
+          q('#slope-summary').hidden = false;
+          q('.ascent .summaryvalue').textContent = (track.ascent || 0).toFixed(2) + heightUnit;
+          q('.descent .summaryvalue').textContent = (track.descent || 0).toFixed(2) + heightUnit;
+        }
+      });
+
+      controlElevation.load(data);
+    } catch (error) {
+      showMapWarning('Could not load the map: ' + error.message);
     }
-    startMap().catch(error => showMapWarning('Could not load the map: ' + error.message));
   </script>
 
   <template id="qgis-preview">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <style>
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
@@ -369,7 +329,13 @@
     }
     .notice.error { background: #fff0ef; color: #8a211d; }
     .notice[hidden] { display: none; }
+    #inactive {
+      position: fixed; inset: 0; z-index: 10; padding: 2em;
+      background: white; text-align: center;
+    }
+    #inactive[hidden] { display: none; }
   </style>
+  <div id="inactive" role="status" hidden></div>
   <main class="preview-area">
     <iframe id="preview" title="Map and elevation profile" src="about:blank"></iframe>
     <div id="notice" class="notice" role="alert" hidden></div>
@@ -410,7 +376,7 @@
         <label class="check"><input id="autohide" type="checkbox"> Auto-hide profile</label>
         <label class="check"><input id="collapseLayers" type="checkbox"> Collapse layers</label>
         <label class="check"><input id="rotateMap" type="checkbox"> Enable map rotation</label>
-        <label class="check"><input id="terrain3D" type="checkbox"> Show 3D terrain</label>
+        <label class="check"><input id="terrain3D" type="checkbox"> Show 3D terrain (BETA)</label>
         <p class="hint">3D terrain requires WebGPU, online elevation tiles and a base map that allows CORS.</p>
       </details>
       <details>
@@ -495,40 +461,71 @@
       }]
     ]);
     basemaps.forEach((value, name) => basemapOptions.appendChild(new Option(name)));
-    let bridge;
     let currentPreview = '';
+    let pending = Promise.resolve();
+    let pendingCount = 0;
+    const embedded = new URLSearchParams(location.search).has('embedded');
 
     function showPreview(url) {
       currentPreview = url;
-      frame.src = url ? url + '?revision=' + Date.now() : 'about:blank';
+      frame.src = url || 'about:blank';
     }
 
-    function updateState() {
-      bridge.state((json) => {
-        const state = JSON.parse(json);
-        layerSelect.replaceChildren();
-        if (!state.layers.length) {
-          layerSelect.add(new Option('No line layers available', ''));
-        } else {
-          state.layers.forEach(layer => layerSelect.add(new Option(layer.name, layer.id)));
-          layerSelect.value = state.layer;
-        }
-        layerSelect.disabled = !state.layers.length;
-        const valid = settingInputs.every(input => input.checkValidity());
-        document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready || !valid);
-        status.textContent = !valid ? 'Please correct the settings.'
-          : state.status === 'empty' ? 'Add a line layer to the QGIS project.'
-          : state.status === 'updating' ? 'Updating preview…'
-          : state.status === 'error' ? 'Could not update the preview. See the QGIS message below.' : '';
-        document.getElementById('retry').hidden = state.status !== 'error';
-        const notice = document.getElementById('notice');
-        notice.hidden = !state.message;
-        if (state.message) {
-          notice.textContent = [state.message.title, state.message.text].filter(Boolean).join(' — ');
-          notice.classList.toggle('error', state.message.error);
-        }
-        if (state.preview !== currentPreview) showPreview(state.preview);
+    async function request(path, options) {
+      const response = await fetch(path, options);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    }
+
+    function connectionError(error) {
+      status.textContent = 'Connection to QGIS lost: ' + error.message;
+      document.querySelectorAll('[data-action]').forEach(button => button.disabled = true);
+    }
+
+    function send(name, value = '') {
+      pendingCount++;
+      pending = pending.then(() => request('command', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, value})
+      })).catch(connectionError).then(() => {
+        pendingCount--;
+        if (!pendingCount) return updateState().then(state => {
+          if (state.settings) document.getElementById('terrain3D').checked = state.settings.terrain3D;
+        }).catch(connectionError);
       });
+    }
+
+    async function updateState() {
+      const state = await request('state');
+      const inactive = state.settings && state.settings.terrain3D === embedded;
+      const inactiveMessage = document.getElementById('inactive');
+      inactiveMessage.hidden = !inactive;
+      inactiveMessage.textContent = embedded
+        ? 'The 3D preview is open in your browser.'
+        : 'The 2D preview is open in QGIS. You can close this tab.';
+      layerSelect.replaceChildren();
+      if (!state.layers.length) {
+        layerSelect.add(new Option('No line layers available', ''));
+      } else {
+        state.layers.forEach(layer => layerSelect.add(new Option(layer.name, layer.id)));
+        layerSelect.value = state.layer;
+      }
+      layerSelect.disabled = !state.layers.length;
+      const valid = settingInputs.every(input => input.checkValidity());
+      document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready || !valid || pendingCount > 0);
+      status.textContent = !valid ? 'Please correct the settings.'
+        : state.status === 'empty' ? 'Add a line layer to the QGIS project.'
+        : state.status === 'updating' ? 'Updating preview…'
+        : state.status === 'error' ? 'Could not update the preview. See the QGIS message below.' : '';
+      document.getElementById('retry').hidden = state.status !== 'error';
+      const notice = document.getElementById('notice');
+      notice.hidden = !state.message;
+      if (state.message) {
+        notice.textContent = [state.message.title, state.message.text].filter(Boolean).join(' — ');
+        notice.classList.toggle('error', state.message.error);
+      }
+      if (state.preview !== currentPreview) showPreview(state.preview);
+      return state;
     }
 
     function updateSettings() {
@@ -542,6 +539,7 @@
           ? 'Maximum must be greater than minimum.' : '');
       }
       if (settingInputs.every(input => input.checkValidity())) {
+        document.querySelectorAll('[data-action]').forEach(button => button.disabled = true);
         const values = Object.fromEntries(settingInputs.map(input => [
           input.id, input.type === 'checkbox' ? input.checked
             : input.type === 'number' ? (input.value === '' ? null : input.valueAsNumber) : input.value
@@ -549,23 +547,30 @@
         const basemap = basemaps.get(values.basemap) || {url: values.basemap, attribution: ''};
         values.basemapUrl = basemap.url;
         values.basemapAttribution = basemap.attribution;
-        bridge.setOptions(JSON.stringify(values));
+        send('setOptions', JSON.stringify(values));
+      } else {
+        updateState().catch(connectionError);
       }
-      updateState();
     }
 
-    new QWebChannel(qt.webChannelTransport, channel => {
-      bridge = channel.objects.bridge;
-      bridge.stateChanged.connect(updateState);
-      bridge.previewChanged.connect(showPreview);
-      document.getElementById('retry').addEventListener('click', () => bridge.retry());
-      layerSelect.addEventListener('change', () => bridge.selectLayer(layerSelect.value));
+    async function startSettings() {
+      const state = await updateState();
+      if (state.settings) {
+        settingInputs.forEach(input => {
+          if (input.type === 'checkbox') input.checked = state.settings[input.id];
+          else input.value = state.settings[input.id] ?? '';
+        });
+      }
+      document.getElementById('retry').addEventListener('click', () => send('retry'));
+      layerSelect.addEventListener('change', () => send('selectLayer', layerSelect.value));
       settingInputs.forEach(input => input.addEventListener('change', updateSettings));
       document.querySelectorAll('[data-action]').forEach(button => {
-        button.addEventListener('click', () => bridge.action(button.dataset.action));
+        button.addEventListener('click', () => send('action', button.dataset.action));
       });
-      updateSettings();
-    });
+      if (!state.settings) updateSettings();
+      setInterval(() => updateState().catch(connectionError), 1000);
+    }
+    startSettings().catch(connectionError);
   </script>
   </template>
 
