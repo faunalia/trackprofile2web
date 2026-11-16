@@ -125,9 +125,9 @@ def check_html_controls(context):
       const panel = document.querySelector('#settings-panel');
       return !panel.hidden && getComputedStyle(panel).display !== 'none'
         && !document.querySelector('#panel-toggle, #panel-close')
-        && [...document.querySelectorAll('[data-action]')].map(button => button.dataset.action).join(',') === 'html,geojson';
+        && [...document.querySelectorAll('[data-action]')].map(button => button.dataset.action).join(',') === 'export';
     })()"""), "settings must be visible without toggle controls at startup"
-    wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=html]')?.disabled")
+    wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=export]')?.disabled")
     assert evaluate("""(() => document.getElementById('theme').value === 'lightblue-theme'
       && !document.getElementById('advanced-options').open
       && document.getElementById('custom-appearance').hidden
@@ -142,6 +142,21 @@ def check_html_controls(context):
       return panel.left === frame.right && panel.right === innerWidth
         && panel.top === 0 && panel.bottom === innerHeight && frame.width > 0;
     })()"""), "settings must occupy a separate full-height right sidebar"
+    assert evaluate("""(() => {
+      const panel = document.querySelector('#settings-panel');
+      const content = panel.querySelector('.content');
+      const advanced = document.querySelector('#advanced-options');
+      advanced.open = true;
+      advanced.querySelectorAll('details').forEach(section => section.open = true);
+      const footer = panel.querySelector('.export-footer').getBoundingClientRect();
+      const bottom = panel.getBoundingClientRect().bottom;
+      const visible = content.scrollHeight > content.clientHeight
+        && Math.abs(footer.bottom - bottom) < 1
+        && document.querySelector('#export-button').getClientRects().length > 0;
+      advanced.querySelectorAll('details').forEach(section => section.open = false);
+      advanced.open = false;
+      return visible;
+    })()"""), "export button must remain visible with advanced options expanded"
     assert evaluate("""
         (() => {
           const doc = document.querySelector('#preview').contentDocument;
@@ -193,8 +208,8 @@ def check_html_controls(context):
           return true;
         })()
     """)
-    wait_until("document.querySelector('[data-action=html]').disabled")
-    wait_until("!document.querySelector('[data-action=html]').disabled")
+    wait_until("document.querySelector('[data-action=export]').disabled")
+    wait_until("!document.querySelector('[data-action=export]').disabled")
     assert evaluate("""(() => !document.getElementById('custom-appearance').hidden
       && !document.getElementById('advanced-options').open)()"""), "custom controls should follow the theme selection"
     assert context.dialog.settings["basemap"] == "OpenStreetMap", "basemap"
@@ -266,8 +281,8 @@ def check_html_controls(context):
         (() => { const select = document.querySelector('#layer');
           select.value = %s; select.dispatchEvent(new Event('change')); return true; })()
     """ % json.dumps(other.id()))
-    wait_until("document.querySelector('[data-action=html]').disabled")
-    wait_until("!document.querySelector('[data-action=html]').disabled")
+    wait_until("document.querySelector('[data-action=export]').disabled")
+    wait_until("!document.querySelector('[data-action=export]').disabled")
     assert context.dialog.layer_combo.currentLayer() == other
     assert json.loads(context.dialog.config["data"])["name"] == "Other track"
 
@@ -289,12 +304,14 @@ def check_html_controls(context):
           const input = document.querySelector('#terrain3D');
           input.checked = true; input.dispatchEvent(new Event('change')); return true;
         })()""")
-        wait_until("document.querySelector('[data-action=html]').disabled")
-        wait_until("!document.querySelector('[data-action=html]').disabled")
+        wait_until("document.querySelector('[data-action=export]').disabled")
+        wait_until("!document.querySelector('[data-action=export]').disabled")
     assert context.dialog.settings["terrain3D"]
     path = str(Path(context.tempdir.name) / "track.html")
     with patch.object(QFileDialog, "getSaveFileName", return_value=(path, "*.html")):
-        evaluate("document.querySelector('[data-action=html]').click(); true")
+        evaluate("document.querySelector('#export-button').click(); true")
+        wait_until("document.querySelector('#export-dialog').open")
+        evaluate("document.querySelector('#export-dialog button[value=export]').click(); true")
         deadline = time.monotonic() + 15
         while not Path(path).exists() and time.monotonic() < deadline:
             loop = QEventLoop()
@@ -305,28 +322,44 @@ def check_html_controls(context):
     assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
     assert '"slope": true' in html and '"imperial": true' in html
     assert '"terrain3D": true' in html and '"rotateMap": true' in html
+    geojson = Path(context.tempdir.name) / "Test-track.geojson"
+    with patch.object(QFileDialog, "getExistingDirectory", return_value=context.tempdir.name):
+        evaluate("document.querySelector('#export-button').click(); true")
+        wait_until("document.querySelector('#export-dialog').open")
+        evaluate("""(() => {
+          const dialog = document.querySelector('#export-dialog');
+          dialog.querySelector('[name=export-format][value=geojson]').checked = true;
+          dialog.querySelector('button[value=export]').click();
+          return true;
+        })()""")
+        deadline = time.monotonic() + 15
+        while not geojson.exists() and time.monotonic() < deadline:
+            loop = QEventLoop()
+            QTimer.singleShot(100, loop.quit)
+            loop.exec()
+    assert geojson.exists(), "HTML + GeoJSON export choice"
     evaluate("""(() => {
       const input = document.querySelector('#profileWidth');
       input.value = '11'; input.dispatchEvent(new Event('change')); return true;
     })()""")
-    wait_until("document.querySelector('[data-action=html]').disabled")
+    wait_until("document.querySelector('[data-action=export]').disabled")
     assert context.dialog.settings["profileWidth"] == 4
     evaluate("""(() => {
       const input = document.querySelector('#profileWidth');
       input.value = '4'; input.dispatchEvent(new Event('change')); return true;
     })()""")
-    wait_until("!document.querySelector('[data-action=html]').disabled")
+    wait_until("!document.querySelector('[data-action=export]').disabled")
     evaluate("""(() => {
       const input = document.querySelector('#yAxisMax');
       input.value = '0'; input.dispatchEvent(new Event('change')); return true;
     })()""")
-    wait_until("document.querySelector('[data-action=html]').disabled")
+    wait_until("document.querySelector('[data-action=export]').disabled")
     assert context.dialog.settings["yAxisMax"] == 500
     evaluate("""(() => {
       const input = document.querySelector('#yAxisMax');
       input.value = '500'; input.dispatchEvent(new Event('change')); return true;
     })()""")
-    wait_until("!document.querySelector('[data-action=html]').disabled")
+    wait_until("!document.querySelector('[data-action=export]').disabled")
     invalid = dict(context.dialog.settings, profileColor="red; }")
     with patch.object(context.dialog.bar, "pushMessage") as message:
         context.dialog.bridge.setOptions(json.dumps(invalid))
@@ -347,8 +380,8 @@ def check_html_controls(context):
       input.value = 'https://example.test/{z}/{x}/{y}.png';
       input.dispatchEvent(new Event('change')); return true;
     })()""")
-    wait_until("document.querySelector('[data-action=html]').disabled")
-    wait_until("!document.querySelector('[data-action=html]').disabled")
+    wait_until("document.querySelector('[data-action=export]').disabled")
+    wait_until("!document.querySelector('[data-action=export]').disabled")
     assert context.dialog.config["settings"]["basemapUrl"] == "https://example.test/{z}/{x}/{y}.png"
     assert context.dialog.config["settings"]["basemapAttribution"] == ""
     wait_until("""(() => {
@@ -359,7 +392,7 @@ def check_html_controls(context):
     context.dialog.mapview.reload()
     wait_until("""document.querySelector('#terrain3D')?.checked
       && document.querySelector('#profileColor')?.value === '#00ff00'
-      && !document.querySelector('[data-action=html]')?.disabled""")
+      && !document.querySelector('[data-action=export]')?.disabled""")
 
 
 @then("the preview follows option and layer changes without refetching unchanged elevations")
@@ -626,7 +659,7 @@ def check_preview(context):
     assert Path(context.dialog.fout).is_file()
 
 
-@then("the export buttons are enabled")
+@then("the export button is enabled")
 def exports_enabled(context):
     assert context.dialog._preview_status == "ready"
 
@@ -658,7 +691,7 @@ def check_qgis_chart(context):
         context.load_results, context.renderer_errors, result))
 
 
-@then("the export buttons remain disabled")
+@then("the export button remains disabled")
 def exports_disabled(context):
     assert context.dialog._preview_status != "ready"
 

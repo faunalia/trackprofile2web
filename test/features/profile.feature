@@ -5,7 +5,7 @@ Feature: Create an elevation profile
     Given a QGIS line layer with elevations
     When I update the preview
     Then the preview contains the line coordinates and elevations
-    And the export buttons are enabled
+    And the export button is enabled
     And the QGIS preview displays the elevation chart
 
   @qgis
@@ -55,7 +55,7 @@ Feature: Create an elevation profile
     Given a QGIS line layer without elevations
     When Mapterhorn elevation tiles are unavailable
     And I update the preview
-    Then the export buttons remain disabled
+    Then the export button remains disabled
 
   @qgis
   Scenario: Export a profile with a separate GeoJSON file
