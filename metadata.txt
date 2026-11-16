@@ -10,7 +10,7 @@
 name=Track Profile to Web
 qgisMinimumVersion=4.0
 description=Leaflet interactive web profiles.
-version=1.3
+version=2.0
 author=Matteo Ghetta
 email=matteo.ghetta@faunalia.eu
 
@@ -24,6 +24,15 @@ repository=https://github.com/faunalia/trackprofile2web
 
 # Uncomment the following line and add your changelog:
 changelog=
+  2.0
+  - [Feature] Migrated plugin from QGIS 3 to QGIS 4
+  - [Feature] Updated Leaflet 1.3.2 to 1.9.4
+  - [Feature] Updated @raruto/leaflet-elevation 0.3.9 to 3.0.1;
+  - [Feature] Added leaflet-rotate 0.6.2
+  - [Feature] Added leaflet-city-mapper 0.1.1 (beta)
+  - [Refactor] Refactor QGIS dialog and integrated settings panel with a vanilla JS live preview
+  - [Tests] Added a bunch of BDD tests (see: behave)
+  - [Tests] Added automated CI/CD workflows (see: ci.yml and cd.yml)
   1.3
   - [Feature] New tiles added
   - [Bugfix] fix wrong description for tiles
