@@ -78,8 +78,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <!-- leaflet-elevation -->
-  <link rel="stylesheet" href="https://unpkg.com/@raruto/leaflet-elevation@3.0.1/dist/leaflet-elevation.min.css" />
-  <script src="https://unpkg.com/@raruto/leaflet-elevation@3.0.1/dist/leaflet-elevation.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/@raruto/leaflet-elevation@3.0.2/dist/leaflet-elevation.min.css" />
+  <script src="https://unpkg.com/@raruto/leaflet-elevation@3.0.2/dist/leaflet-elevation.min.js"></script>
 
 </head>
 
@@ -115,7 +115,7 @@
             throw new Error('WebGPU canvas is unavailable');
           }
           device.destroy();
-          await import('https://unpkg.com/leaflet-city-mapper@0.1.1/dist/leaflet-city-mapper.js');
+          await import('https://unpkg.com/leaflet-city-mapper@0.1.2/dist/leaflet-city-mapper.js');
         } catch (error) {
           showMapWarning('3D terrain unavailable; using 2D map. ' + error.message);
           terrain = false;
@@ -238,7 +238,7 @@
         // HOTFIX for leaflet-elevation 3.0.1 (computes slope from feet and miles without converting units).
         ...(settings.slope && settings.imperial ? {handlers: [
           'Distance', 'Time', 'Altitude',
-          import('https://unpkg.com/@raruto/leaflet-elevation@3.0.1/src/handlers/slope.js')
+          import('https://unpkg.com/@raruto/leaflet-elevation@3.0.2/src/handlers/slope.js')
             .then(({Slope}) => ({SlopeInImperial: function() {
               const handler = Slope.call(this);
               const calculate = handler.pointToAttr;
