@@ -152,10 +152,8 @@
           ...(terrain ? {crossOrigin: true} : {})
         })
       };
-      if (terrain) baseLayers.OTM.on('tileerror', () =>
-        showMapWarning('3D base map tile failed to load. Check the URL and CORS permissions.'));
-
       if (terrain) {
+        baseLayers.OTM.on('tileerror', () => showMapWarning('3D base map tile failed to load. Check the URL and CORS permissions.'));
         const terrainLayer = new L.Layer({
           source: {
             type: 'terrain',
@@ -431,7 +429,16 @@
       </details>
       <details>
         <summary>About</summary>
-        <p class="hint">2D lines use elevations from <a href="https://mapterhorn.com/">Mapterhorn</a>. The profile uses <a href="https://github.com/Raruto/leaflet-elevation">leaflet-elevation</a>.</p>
+        <p class="hint"><strong>Track Profile to Web</strong> creates interactive maps and elevation profiles from QGIS line layers.
+          Created by Matteo Ghetta. <a href="https://github.com/faunalia/trackprofile2web">Source code and issues</a>.</p>
+        <p class="hint"><strong>Elevation data:</strong> lines without Z values are sampled from
+          <a href="https://mapterhorn.com/attribution">Mapterhorn</a> without changing the original layer.
+          The optional 3D terrain also uses Mapterhorn.</p>
+        <p class="hint"><strong>Built with:</strong> <a href="https://leafletjs.com/">Leaflet</a> and
+          <a href="https://github.com/Raruto/leaflet-elevation">leaflet-elevation</a>,
+          <a href="https://github.com/Raruto/leaflet-rotate">leaflet-rotate</a> and
+          <a href="https://github.com/Raruto/leaflet-city-mapper">leaflet-city-mapper</a> by
+          <a href="https://github.com/Raruto">Raruto</a>.</p>
       </details>
     </div>
   </aside>
