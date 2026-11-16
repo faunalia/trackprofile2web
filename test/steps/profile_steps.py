@@ -128,10 +128,10 @@ def check_html_controls(context):
         && [...document.querySelectorAll('[data-action]')].map(button => button.dataset.action).join(',') === 'export';
     })()"""), "settings must be visible without toggle controls at startup"
     wait_until("document.querySelector('#layer')?.value && !document.querySelector('[data-action=export]')?.disabled")
+    wait_until("!!document.querySelector('#preview')?.contentDocument?.querySelector('.lightblue-theme.elevation-control')")
     assert evaluate("""(() => document.getElementById('theme').value === 'lightblue-theme'
       && !document.getElementById('advanced-options').open
-      && document.getElementById('custom-appearance').hidden
-      && document.querySelector('#preview').contentDocument.querySelector('.lightblue-theme.elevation-control'))()"""), "default theme and collapsed advanced options"
+      && document.getElementById('custom-appearance').hidden)()"""), "default theme and collapsed advanced options"
     assert evaluate("document.querySelector('#layer').selectedOptions[0].textContent") == "Test track", "layer"
     assert evaluate("document.querySelector('#preview').src.includes('map.html')"), "preview URL"
     assert evaluate("document.querySelector('#preview').getBoundingClientRect().height === innerHeight"), "preview height"
@@ -297,16 +297,6 @@ def check_html_controls(context):
         wait_until("!document.querySelector('#terrain3D').checked")
         assert not context.dialog.settings["terrain3D"]
         open_url.assert_not_called()
-    with patch.object(module.QtWidgets.QMessageBox, "question",
-                      return_value=module.QtWidgets.QMessageBox.StandardButton.Yes), \
-         patch.object(module.QDesktopServices, "openUrl", return_value=True):
-        evaluate("""(() => {
-          const input = document.querySelector('#terrain3D');
-          input.checked = true; input.dispatchEvent(new Event('change')); return true;
-        })()""")
-        wait_until("document.querySelector('[data-action=export]').disabled")
-        wait_until("!document.querySelector('[data-action=export]').disabled")
-    assert context.dialog.settings["terrain3D"]
     path = str(Path(context.tempdir.name) / "track.html")
     with patch.object(QFileDialog, "getSaveFileName", return_value=(path, "*.html")):
         evaluate("document.querySelector('#export-button').click(); true")
@@ -321,8 +311,8 @@ def check_html_controls(context):
     html = Path(path).read_text(encoding="utf-8")
     assert "settings-panel" not in html and "qwebchannel" not in html and "#00ff00" in html
     assert '"slope": true' in html and '"imperial": true' in html
-    assert '"terrain3D": true' in html and '"rotateMap": true' in html
-    geojson = Path(context.tempdir.name) / "Test-track.geojson"
+    assert '"terrain3D": false' in html and '"rotateMap": true' in html
+    geojson = Path(context.tempdir.name) / "Other-track.geojson"
     with patch.object(QFileDialog, "getExistingDirectory", return_value=context.tempdir.name):
         evaluate("document.querySelector('#export-button').click(); true")
         wait_until("document.querySelector('#export-dialog').open")
@@ -389,6 +379,20 @@ def check_html_controls(context):
       return frame.contentDocument.readyState === 'complete'
         && frame.contentWindow.baseLayers?.OTM._url === 'https://example.test/{z}/{x}/{y}.png';
     })()""")
+    with patch.object(module.QtWidgets.QMessageBox, "question",
+                      return_value=module.QtWidgets.QMessageBox.StandardButton.Yes), \
+         patch.object(module.QDesktopServices, "openUrl", return_value=True):
+        evaluate("""(() => {
+          const input = document.querySelector('#terrain3D');
+          input.checked = true; input.dispatchEvent(new Event('change')); return true;
+        })()""")
+        wait_until("document.querySelector('[data-action=export]').disabled")
+        wait_until("!document.querySelector('[data-action=export]').disabled")
+    assert context.dialog.settings["terrain3D"]
+    path_3d = str(Path(context.tempdir.name) / "track-3d.html")
+    with patch.object(QFileDialog, "getSaveFileName", return_value=(path_3d, "*.html")):
+        context.dialog.saveAsHtml()
+    assert '"terrain3D": true' in Path(path_3d).read_text(encoding="utf-8")
     context.dialog.mapview.reload()
     wait_until("""document.querySelector('#terrain3D')?.checked
       && document.querySelector('#profileColor')?.value === '#00ff00'
@@ -928,7 +932,7 @@ def check_chart(context):
     }""")
     attribution = context.page.locator(".leaflet-control-attribution")
     assert "Test basemap attribution" in attribution.inner_text()
-    assert attribution.get_by_role("link", name="Raruto").get_attribute("href") == "https://github.com/Raruto/leaflet-elevation"
+    assert attribution.get_by_role("link", name="Raruto").get_attribute("href") == "https://raruto.github.io"
     for width, height in ((900, 560), (900, 400), (900, 800), (320, 560)):
         context.page.set_viewport_size({"width": width, "height": height})
         context.page.wait_for_timeout(200)
