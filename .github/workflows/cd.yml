@@ -1,0 +1,106 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "[0-9]*"
+      - "v[0-9]*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build plugin ZIP
+        run: |
+          python3 - <<'PY'
+          import configparser
+          import os
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          metadata = configparser.ConfigParser()
+          if not metadata.read("metadata.txt", encoding="utf-8"):
+              sys.exit("Plugin metadata is missing")
+          version = metadata.get("general", "version")
+          tag = os.environ["GITHUB_REF_NAME"]
+          if tag not in (version, "v" + version):
+              sys.exit("Tag does not match the plugin version: " + version)
+
+          files = ("__init__.py", "track_profile_2_web.py", "metadata.txt",
+                   "icon.png", "track_profile_2_web.html", "LICENSE")
+          with zipfile.ZipFile("track_profile_2_web.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+              for file in files:
+                  archive.write(file, str(Path("track_profile_2_web") / file))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-package
+          path: track_profile_2_web.zip
+          if-no-files-found: error
+
+  qgis-release:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: plugin-package
+      - name: Upload to QGIS
+        env:
+          QGIS_USERNAME: ${{ secrets.QGIS_USERNAME }}
+          QGIS_PASSWORD: ${{ secrets.QGIS_PASSWORD }}
+          QGIS_UPLOAD_URL: https://plugins.qgis.org/plugins/RPC2/
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          import xmlrpc.client
+          from urllib.parse import quote, urlsplit, urlunsplit
+
+          url = urlsplit(os.environ["QGIS_UPLOAD_URL"])
+          if not url.hostname or url.username is not None or url.password is not None:
+              sys.exit("Invalid upload URL")
+          if url.scheme != "https" and not (url.scheme == "http" and url.hostname in ("localhost", "127.0.0.1", "::1")):
+              sys.exit("Upload requires HTTPS except for a local repository")
+          username = os.environ.get("QGIS_USERNAME")
+          password = os.environ.get("QGIS_PASSWORD")
+          if not username or not password:
+              sys.exit("Set the QGIS_USERNAME and QGIS_PASSWORD secrets")
+          auth = "%s:%s@" % (quote(username, safe=""), quote(password, safe=""))
+          address = urlunsplit((url.scheme, auth + url.netloc, url.path, url.query, url.fragment))
+          try:
+              with open("track_profile_2_web.zip", "rb") as handle:
+                  package = xmlrpc.client.Binary(handle.read())
+              with xmlrpc.client.ServerProxy(address) as server:
+                  plugin_id, version_id = server.plugin.upload(package)
+              print("Plugin ID: %s" % plugin_id)
+              print("Version ID: %s" % version_id)
+          except xmlrpc.client.ProtocolError as err:
+              sys.exit("Upload failed: HTTP %d %s" % (err.errcode, err.errmsg))
+          except (xmlrpc.client.Fault, OSError) as err:
+              sys.exit("Upload failed: %s" % err)
+          PY
+
+  github-release:
+    needs: qgis-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: plugin-package
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" track_profile_2_web.zip --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
