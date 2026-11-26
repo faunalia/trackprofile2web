@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>QGIS Track Profile 2 Web</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+  <style>
+    html,
+    body,
+    #map,
+    #elevation-div {
+      width: 100%;
+      padding: 0px;
+      margin: 0px;
+      position: relative;
+      z-index: 9999;
+    }
+
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; }
+    #map {
+      flex: 1 1 0;
+      min-height: 0;
+      z-index: 1;
+    }
+
+    #elevation-div {
+      flex: 0 0 auto;
+      font: 12px/1.5 "Helvetica Neue", Arial, Helvetica, sans-serif;
+    }
+    #elevation-div svg.background { display: block; max-width: 100%; max-height: 40vh; }
+
+    body.attached-profile #elevation-div { display: none; }
+
+    .data-summary {
+      font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      margin-left: 45px;
+    }
+
+    body.attached-profile .data-summary {
+      position: absolute;
+      bottom: 0;
+      left: 45px;
+      margin-left: 0;
+    }
+
+    .data-summary .summaryvalue {
+      font-weight: bold;
+    }
+
+    #map-warning {
+      position: absolute; top: 10px; left: 50px; z-index: 10000;
+      max-width: min(460px, calc(100% - 70px)); padding: 8px 12px;
+      background: #fff3cd; color: #664d03; border-radius: 4px;
+    }
+
+  </style>
+  <style>
+   .custom-theme.elevation-control .area path.altitude {
+    fill: var(--profile-color);
+    stroke: hsla(60, 0%, 0%, 0.85);
+    stroke-width: var(--profile-width);
+   }
+
+   .custom-theme.height-focus.circle-lower {
+     fill: var(--marker-color);
+   }
+
+   .custom-theme.elevation-polyline {
+     stroke: var(--line-color);
+     stroke-opacity: var(--line-opacity);
+   }
+ </style>
+
+  <!-- Leaflet (JS/CSS) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- leaflet-elevation -->
+  <link rel="stylesheet" href="https://unpkg.com/@raruto/leaflet-elevation@3.0.2/dist/leaflet-elevation.min.css" />
+  <script src="https://unpkg.com/@raruto/leaflet-elevation@3.0.2/dist/leaflet-elevation.min.js"></script>
+
+</head>
+
+<body>
+
+  <div id="map"></div>
+  <div id="map-warning" role="alert" hidden></div>
+  <div id="elevation-div" class="leaflet-control elevation"></div>
+
+  <div id="data-summary" class="data-summary"><span class="totlen"><span class="summarylabel">Total Length: </span><span class="summaryvalue">0</span></span> &mdash; <span class="maxele"><span class="summarylabel">Max Elevation: </span><span class="summaryvalue">0</span></span>
+    &mdash; <span class="minele"><span class="summarylabel">Min Elevation: </span><span class="summaryvalue">0</span></span><span id="slope-summary" hidden>
+    &mdash; <span class="ascent">Ascent: <span class="summaryvalue">0</span></span> &mdash; <span class="descent">Descent: <span class="summaryvalue">0</span></span></span></div>
+
+  <script type="module">
+    const {data, settings} = '{ py_opts }';
+    function showMapWarning(message) {
+      const notice = document.getElementById('map-warning');
+      notice.textContent = message;
+      notice.hidden = false;
+      console.error(message);
+    }
+
+    try {
+      let terrain = settings.terrain3D;
+      if (terrain) {
+        try {
+          const adapter = await navigator.gpu?.requestAdapter();
+          if (!adapter) throw new Error('WebGPU is unavailable');
+          const device = await adapter.requestDevice();
+          const context = document.createElement('canvas').getContext('webgpu');
+          if (!context) {
+            device.destroy();
+            throw new Error('WebGPU canvas is unavailable');
+          }
+          device.destroy();
+          await import('https://unpkg.com/leaflet-city-mapper@0.1.2/dist/leaflet-city-mapper.js');
+        } catch (error) {
+          showMapWarning('3D terrain unavailable; using 2D map. ' + error.message);
+          terrain = false;
+        }
+      }
+      if (!terrain && (settings.rotateMap || settings.distanceMarkers)) {
+        await import('https://unpkg.com/leaflet-rotate@0.6.2/dist/leaflet-rotate.js');
+      }
+      document.documentElement.style.setProperty('--profile-color', settings.profileColor);
+      document.documentElement.style.setProperty('--profile-width', settings.profileWidth);
+      document.documentElement.style.setProperty('--marker-color', settings.markerColor);
+      document.documentElement.style.setProperty('--line-color', settings.lineColor);
+      document.documentElement.style.setProperty('--line-opacity', settings.hotline ? 0 : settings.markerOpacity);
+      if (settings.detached && settings.width != null) {
+        document.getElementById('elevation-div').style.width = `min(100%, ${settings.width}px)`;
+      }
+      document.body.classList.toggle('attached-profile', !settings.detached);
+      const map = window.map = new L.Map('map', {
+        center: [41.4583, 12.7059],
+        zoom: 5,
+        markerZoomAnimation: false,
+        zoomControl: false,
+        rotate: terrain || settings.rotateMap || settings.distanceMarkers,
+        rotateControl: settings.rotateMap ? {closeOnZeroBearing: false} : false,
+        touchRotate: settings.rotateMap,
+        shiftKeyRotate: settings.rotateMap,
+        ...(terrain ? {pitch: 45, pitchDrag: settings.rotateMap, touchPitch: true} : {})
+      });
+      map.attributionControl.addAttribution('<a href="https://raruto.github.io"><svg xmlns="http://www.w3.org/2000/svg" fill="#222" viewBox="0 0 32 32" width="12" height="12" style="vertical-align: center;"><path d="M 5.6875 5 C 5.6875 5 5 6.207031 5 8.25 C 5 9.605469 5.308594 10.320313 5.53125 10.6875 C 3.96875 12.3125 3 14.515625 3 17.34375 C 3 24.585938 7.589844 27 16 27 C 24.410156 27 29 24.585938 29 17.34375 C 29 14.417969 28.085938 12.21875 26.59375 10.625 C 26.964844 9.515625 27.382813 7.421875 26.34375 5 C 23.242188 5 20.65625 7.382813 20.5625 7.46875 C 19.113281 7.152344 17.574219 7 16 7 C 14.394531 7 12.820313 7.195313 11.34375 7.5625 C 9.265625 5.503906 6.757813 5 5.6875 5 Z M 20.6875 15.4375 C 21.53125 15.429688 22.3125 15.5 23 15.71875 C 24.832031 16.300781 26 17.984375 26 19.875 C 26 25.109375 23.191406 26 16 26 C 10.65625 26 6.3125 25.058594 6.3125 20.0625 C 6.3125 18.15625 7.347656 17.078125 8.09375 16.40625 C 9.734375 14.929688 12.324219 15.65625 16 15.65625 C 17.671875 15.65625 19.277344 15.453125 20.6875 15.4375 Z M 10.5 18 C 9.671875 18 9 18.894531 9 20 C 9 21.105469 9.671875 22 10.5 22 C 11.328125 22 12 21.105469 12 20 C 12 18.894531 11.328125 18 10.5 18 Z M 21.5 18 C 20.671875 18 20 18.894531 20 20 C 20 21.105469 20.671875 22 21.5 22 C 22.328125 22 23 21.105469 23 20 C 23 18.894531 22.328125 18 21.5 18 Z M 10.34375 18.84375 C 10.578125 18.84375 10.75 19.042969 10.75 19.28125 C 10.75 19.519531 10.578125 19.71875 10.34375 19.71875 C 10.109375 19.71875 9.90625 19.519531 9.90625 19.28125 C 9.90625 19.042969 10.109375 18.84375 10.34375 18.84375 Z M 21.34375 18.84375 C 21.578125 18.84375 21.75 19.042969 21.75 19.28125 C 21.75 19.519531 21.578125 19.71875 21.34375 19.71875 C 21.109375 19.71875 20.90625 19.519531 20.90625 19.28125 C 20.90625 19.042969 21.109375 18.84375 21.34375 18.84375 Z"></path></svg> Raruto</a>');
+
+      const baseLayers = window.baseLayers = {
+        OTM: new L.TileLayer(settings.basemapUrl, {
+          attribution: settings.basemapAttribution,
+          ...(terrain ? {crossOrigin: true} : {})
+        })
+      };
+      if (terrain) {
+        baseLayers.OTM.on('tileerror', () => showMapWarning('3D base map tile failed to load. Check the URL and CORS permissions.'));
+        const terrainLayer = new L.Layer({
+          source: {
+            type: 'terrain',
+            async getTile(z, x, y, signal) {
+              for (let sourceZoom = Math.min(17, z); sourceZoom >= 0; sourceZoom--) {
+                const factor = 2 ** (z - sourceZoom);
+                const url = `https://tiles.mapterhorn.com/${sourceZoom}/${Math.floor(x / factor)}/${Math.floor(y / factor)}.webp`;
+                const response = await fetch(url, {signal});
+                if (response.status === 404) continue;
+                if (!response.ok) throw new Error(`Mapterhorn: HTTP ${response.status}`);
+                const image = await createImageBitmap(await response.blob());
+                try {
+                  if (image.width !== 512 || image.height !== 512) throw new Error('Invalid Mapterhorn tile');
+                  const canvas = document.createElement('canvas');
+                  canvas.width = canvas.height = 512;
+                  const context = canvas.getContext('2d', {willReadFrequently: true});
+                  context.drawImage(image, 0, 0);
+                  const pixels = context.getImageData(0, 0, 512, 512).data;
+                  const heights = new Float32Array(256 * 256);
+                  for (let row = 0; row < 256; row++) {
+                    for (let column = 0; column < 256; column++) {
+                      const px = Math.floor(((x % factor) + (column + 0.5) / 256) * 512 / factor);
+                      const py = Math.floor(((y % factor) + (row + 0.5) / 256) * 512 / factor);
+                      const index = (py * 512 + px) * 4;
+                      if (!pixels[index + 3]) throw new Error('Missing Mapterhorn elevation data');
+                      heights[row * 256 + column] = pixels[index] * 256 + pixels[index + 1] + pixels[index + 2] / 256 - 32768;
+                    }
+                  }
+                  return heights;
+                } finally {
+                  image.close();
+                }
+              }
+              throw new Error('No Mapterhorn elevation tile available');
+            }
+          },
+          attribution: 'Elevation: <a href="https://mapterhorn.com/attribution">&copy; Mapterhorn</a>'
+        });
+        terrainLayer.on('error', event => showMapWarning('3D terrain error: ' + event.error.message));
+        terrainLayer.addTo(map);
+      }
+      const controlZoom = window.controlZoom = new L.Control.Zoom({position: 'topleft'});
+      const controlElevation = window.controlElevation = L.control.elevation({
+        position: settings.position,
+        theme: settings.theme || 'lightblue-theme',
+        collapsed: settings.collapseProfile,
+        detached: settings.detached,
+        elevationDiv: '#elevation-div',
+        followMarker: settings.follow,
+        autohide: settings.autohide,
+        autohideMarker: settings.autohideMarker,
+        marker: settings.marker,
+        slope: settings.slope,
+        imperial: settings.imperial,
+        hotline: settings.hotline ? 'elevation' : false,
+        distanceMarkers: settings.distanceMarkers && settings.imperial ? {
+          lazy: true,
+          distance: true,
+          direction: true,
+          offset: 804.672,
+          textFunction: distance => (distance / 1609.344).toFixed(0)
+        } : settings.distanceMarkers,
+        edgeScale: settings.edgeScale,
+        legend: settings.legend,
+        ruler: settings.ruler,
+        autofitBounds: settings.autofitBounds,
+        interpolation: settings.interpolation,
+        summary: false,
+        downloadLink: false,
+        ...(!settings.trackEndpoints ? {trkStart: false, trkEnd: false} : {}),
+        ...Object.fromEntries(
+          ['width', 'height', 'xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax',
+           'xTicks', 'yTicks', 'decimalsX', 'decimalsY', 'zFollow']
+            .filter(key => settings[key] != null).map(key => [key, settings[key]])
+        ),
+        ...Object.fromEntries(
+          ['dragging', 'zooming'].filter(key => settings[key] !== 'auto')
+            .map(key => [key, settings[key] === 'enabled'])
+        ),
+        forceAxisBounds: ['xAxisMin', 'xAxisMax', 'yAxisMin', 'yAxisMax']
+          .some(key => settings[key] != null),
+        // HOTFIX for leaflet-elevation 3.0.1 (computes slope from feet and miles without converting units).
+        ...(settings.slope && settings.imperial ? {handlers: [
+          'Distance', 'Time', 'Altitude',
+          import('https://unpkg.com/@raruto/leaflet-elevation@3.0.2/src/handlers/slope.js')
+            .then(({Slope}) => ({SlopeInImperial: function() {
+              const handler = Slope.call(this);
+              const calculate = handler.pointToAttr;
+              handler.pointToAttr = (...args) => calculate(...args) * 0.621371 / 3.28084;
+              return handler;
+            }})),
+          'Speed', 'Acceleration'
+        ]} : {})
+      }).addTo(map);
+      const controlLayer = window.controlLayer = L.control.layers(baseLayers, null, {collapsed: settings.collapseLayers});
+
+      controlZoom.addTo(map);
+      controlLayer.addTo(map);
+
+      map.addLayer(baseLayers.OTM);
+
+      controlElevation.on('eledata_loaded', function(e) {
+        const q = document.querySelector.bind(document);
+        const track = e.track_info;
+
+        controlLayer.addOverlay(e.layer, e.name);
+
+        const distanceUnit = settings.imperial ? ' mi' : ' km';
+        const heightUnit = settings.imperial ? ' ft' : ' m';
+        q('.totlen .summaryvalue').textContent = track.distance.toFixed(2) + distanceUnit;
+        q('.maxele .summaryvalue').textContent = track.elevation_max.toFixed(2) + heightUnit;
+        q('.minele .summaryvalue').textContent = track.elevation_min.toFixed(2) + heightUnit;
+        if (settings.slope) {
+          q('#slope-summary').hidden = false;
+          q('.ascent .summaryvalue').textContent = (track.ascent || 0).toFixed(2) + heightUnit;
+          q('.descent .summaryvalue').textContent = (track.descent || 0).toFixed(2) + heightUnit;
+        }
+      });
+
+      controlElevation.load(data);
+    } catch (error) {
+      showMapWarning('Could not load the map: ' + error.message);
+    }
+  </script>
+
+  <template id="qgis-preview">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { display: flex; font: 14px/1.4 system-ui, sans-serif; color: #172331; background: #e8edf1; }
+    .preview-area { position: relative; flex: 1 1 0; min-width: 0; height: 100%; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; }
+    button, input, select { font: inherit; }
+    button, select, input:not([type="checkbox"]) { border: 1px solid #becbd4; border-radius: 6px; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 3px solid #65aaf4; outline-offset: 2px;
+    }
+    .panel {
+      flex: 0 0 min(350px, 70vw); height: 100%; min-width: 0;
+      display: flex; flex-direction: column; overflow: hidden;
+      background: white; border-left: 1px solid #d5dfe6;
+    }
+    .panel-header { padding: 16px 18px 10px; }
+    .panel-header h1 { margin: 0; font-size: 17px; }
+    .content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 18px 18px; }
+    .export-footer { flex: 0 0 auto; padding: 12px 18px; border-top: 1px solid #d5dfe6; background: white; }
+    label.field { display: grid; gap: 5px; margin: 12px 0; font-weight: 600; }
+    select, input[type="text"], input[type="number"] {
+      width: 100%; min-width: 0; min-height: 36px; padding: 6px 8px; background: white; color: #172331;
+    }
+    input[type="color"] { width: 100%; height: 36px; padding: 3px; background: white; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+    .check { display: flex; align-items: center; gap: 8px; margin: 9px 0; }
+    .check input { width: 16px; height: 16px; accent-color: #1b658f; }
+    details { border-top: 1px solid #e3eaf0; padding: 12px 0; }
+    summary { font-weight: 700; cursor: pointer; }
+    .actions { display: grid; gap: 8px; }
+    .actions button { padding: 9px; color: #173c59; background: #f3f7fa; }
+    .actions button.primary { background: #17638b; border-color: #17638b; color: white; }
+    .actions button:disabled { opacity: .5; cursor: not-allowed; }
+    dialog {
+      width: min(400px, calc(100vw - 32px)); border: 1px solid #d5dfe6;
+      border-radius: 10px; padding: 20px; color: #172331; box-shadow: 0 8px 32px #0003;
+    }
+    dialog::backdrop { background: #10233480; }
+    dialog h2 { margin: 0 0 16px; font-size: 18px; }
+    dialog .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }
+    dialog input[type="radio"] { border: 0; border-radius: 50%; }
+    .status { padding: 10px 12px; border-radius: 6px; background: #eaf3f9; color: #31536a; }
+    .status:empty { display: none; }
+    .hint { color: #536778; font-size: 12px; }
+    a { color: #17638b; }
+    .notice {
+      position: absolute; bottom: 12px; left: 12px; z-index: 4;
+      max-width: min(460px, calc(100% - 24px)); padding: 10px 14px;
+      border-radius: 6px; background: #eaf3f9; color: #173c59;
+      box-shadow: 0 2px 8px #0003; overflow-wrap: anywhere;
+    }
+    .notice.error { background: #fff0ef; color: #8a211d; }
+    .notice[hidden] { display: none; }
+    #inactive {
+      position: fixed; inset: 0; z-index: 10; padding: 2em;
+      background: white; text-align: center;
+    }
+    #inactive[hidden] { display: none; }
+  </style>
+  <div id="inactive" role="status" hidden></div>
+  <main class="preview-area">
+    <iframe id="preview" title="Map and elevation profile" src="about:blank"></iframe>
+    <div id="notice" class="notice" role="alert" hidden></div>
+  </main>
+  <aside id="settings-panel" class="panel" aria-label="Track profile settings">
+    <header class="panel-header">
+      <h1>Track profile</h1>
+      <p class="hint">Choose a line and map to preview or export your profile.</p>
+    </header>
+    <div class="content">
+      <div id="status" class="status" role="status">Connecting to QGIS…</div>
+      <button id="retry" type="button" hidden>Retry preview</button>
+      <label class="field">Line layer <select id="layer" aria-label="Line layer"></select></label>
+      <label class="field">Base map
+        <input id="basemap" type="text" list="basemap-options" value="OpenTopoMap" required placeholder="Choose a map or enter a tile URL">
+        <datalist id="basemap-options"></datalist>
+      </label>
+      <label class="field">Profile theme
+        <select id="theme">
+          <option value="lightblue-theme">Light blue</option>
+          <option value="steelblue-theme">Steel blue</option>
+          <option value="lime-theme">Lime</option>
+          <option value="purple-theme">Purple</option>
+          <option value="yellow-theme">Yellow</option>
+          <option value="red-theme">Red</option>
+          <option value="magenta-theme">Magenta</option>
+          <option value="custom-theme">Custom</option>
+        </select>
+      </label>
+      <div id="custom-appearance" hidden>
+        <div class="grid">
+          <label class="field">Profile color <input id="profileColor" type="color" value="#d45f5f"></label>
+          <label class="field">Track color <input id="lineColor" type="color" value="#ff0000"></label>
+          <label class="field">Marker color <input id="markerColor" type="color" value="#ffb800"></label>
+          <label class="field">Profile width <input id="profileWidth" type="number" min="0" max="10" step="0.5" value="2.5" required></label>
+          <label class="field">Marker opacity <input id="markerOpacity" type="number" min="0" max="1" step="0.05" value="0.85" required></label>
+        </div>
+      </div>
+      <label class="check"><input id="imperial" type="checkbox"> Use imperial units</label>
+      <details id="advanced-options">
+        <summary>Advanced options</summary>
+        <label class="check"><input id="detached" type="checkbox" checked> Detached profile</label>
+        <label class="field">Profile position
+          <select id="position">
+            <option value="topright">Top right</option><option value="topleft">Top left</option>
+            <option value="bottomright">Bottom right</option><option value="bottomleft">Bottom left</option>
+          </select>
+        </label>
+        <label class="check"><input id="follow" type="checkbox"> Follow track</label>
+        <label class="check"><input id="collapseProfile" type="checkbox"> Collapse profile</label>
+        <label class="check"><input id="autohide" type="checkbox"> Auto-hide profile</label>
+        <label class="check"><input id="collapseLayers" type="checkbox"> Collapse layers</label>
+        <label class="check"><input id="rotateMap" type="checkbox"> Enable map rotation</label>
+        <label class="check"><input id="terrain3D" type="checkbox"> Show 3D terrain (BETA)</label>
+        <p class="hint">3D terrain requires WebGPU, online elevation tiles and a base map that allows CORS.</p>
+        <label class="check"><input id="slope" type="checkbox"> Show slope and ascent/descent</label>
+        <label class="check"><input id="distanceMarkers" type="checkbox"> Distance and direction markers</label>
+        <label class="check"><input id="hotline" type="checkbox"> Color track by elevation</label>
+        <label class="check"><input id="legend" type="checkbox" checked> Show legend</label>
+        <label class="check"><input id="ruler" type="checkbox" checked> Show chart ruler</label>
+        <label class="check"><input id="trackEndpoints" type="checkbox" checked> Show start and end markers</label>
+        <label class="check"><input id="edgeScale" type="checkbox"> Show map edge scale</label>
+        <label class="check"><input id="autofitBounds" type="checkbox" checked> Fit map to track</label>
+        <label class="check"><input id="autohideMarker" type="checkbox" checked> Hide marker when not in use</label>
+        <label class="field">Map marker
+          <select id="marker"><option value="elevation-line">Elevation line</option><option value="position-marker">Position marker</option></select>
+        </label>
+        <label class="field">Chart selection
+          <select id="dragging"><option value="auto">Automatic</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
+        </label>
+        <label class="field">Chart zoom
+          <select id="zooming"><option value="auto">Automatic</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
+        </label>
+        <label class="field">Chart interpolation
+          <select id="interpolation">
+            <option value="curveLinear">Linear</option><option value="curveStep">Step</option>
+            <option value="curveStepBefore">Step before</option><option value="curveStepAfter">Step after</option>
+          </select>
+        </label>
+        <div class="grid">
+          <label class="field">Chart width (px) <input id="width" type="number" min="120" max="4096" step="1" placeholder="Automatic"></label>
+          <label class="field">Chart height (px) <input id="height" type="number" min="120" max="1200" step="1" placeholder="Automatic"></label>
+          <label class="field">Distance min <input id="xAxisMin" type="number" min="0" step="any" placeholder="Automatic"></label>
+          <label class="field">Distance max <input id="xAxisMax" type="number" min="0" step="any" placeholder="Automatic"></label>
+          <label class="field">Elevation min <input id="yAxisMin" type="number" step="any" placeholder="Automatic"></label>
+          <label class="field">Elevation max <input id="yAxisMax" type="number" step="any" placeholder="Automatic"></label>
+          <label class="field">Distance ticks <input id="xTicks" type="number" min="1" max="100" step="1" placeholder="Automatic"></label>
+          <label class="field">Elevation ticks <input id="yTicks" type="number" min="1" max="100" step="1" placeholder="Automatic"></label>
+          <label class="field">Distance decimals <input id="decimalsX" type="number" min="0" max="10" step="1" placeholder="Automatic"></label>
+          <label class="field">Elevation decimals <input id="decimalsY" type="number" min="0" max="10" step="1" placeholder="Automatic"></label>
+          <label class="field">Follow minimum zoom <input id="zFollow" type="number" min="0" max="22" step="1" placeholder="Automatic"></label>
+        </div>
+        <p class="hint">Axis limits use the selected units. Chart size is limited by the available space.</p>
+      </details>
+      <p class="hint"><strong>Track Profile to Web</strong> created by <a href="https://github.com/faunalia/trackprofile2web">Matteo Ghetta</a>.</p>
+      <p class="hint"><strong>Elevation data:</strong> sampled from <a href="https://mapterhorn.com/attribution">Mapterhorn</a>.</p>
+      <p class="hint"><strong>Built with:</strong> <a href="https://leafletjs.com/">Leaflet</a> and
+        <a href="https://github.com/Raruto/leaflet-elevation">leaflet-elevation</a>,
+        <a href="https://github.com/Raruto/leaflet-rotate">leaflet-rotate</a> and
+        <a href="https://github.com/Raruto/leaflet-city-mapper">leaflet-city-mapper</a> by
+        <a href="https://github.com/Raruto">Raruto</a>.
+      </p>
+    </div>
+    <footer class="export-footer">
+      <div class="actions">
+        <button id="export-button" class="primary" data-action="export" type="button" disabled>Export</button>
+      </div>
+    </footer>
+    <dialog id="export-dialog" aria-labelledby="export-title">
+      <form method="dialog">
+        <h2 id="export-title">Choose export format</h2>
+        <label class="check"><input type="radio" name="export-format" value="html" checked> Single HTML file</label>
+        <label class="check"><input type="radio" name="export-format" value="geojson"> HTML + GeoJSON</label>
+        <div class="actions">
+          <button value="cancel">Cancel</button>
+          <button class="primary" value="export">Export</button>
+        </div>
+      </form>
+    </dialog>
+  </aside>
+  <script>
+    const frame = document.getElementById('preview');
+    const status = document.getElementById('status');
+    const layerSelect = document.getElementById('layer');
+    const basemapOptions = document.getElementById('basemap-options');
+    const settingInputs = [...document.querySelectorAll('#settings-panel input, #settings-panel select:not(#layer)')];
+    const basemaps = new Map([
+      ['OpenTopoMap', {
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        attribution: 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenTopoMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+      }],
+      ['OpenStreetMap', {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution: 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+      }],
+      ['WikimediaMap', {
+        url: 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png',
+        attribution: 'Map data: &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+      }],
+      ['Google', {url: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attribution: ''}],
+      ['ESRI Satellite Map', {
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attribution: '&copy; <a href="http://www.esri.com/">Esri</a>'
+      }]
+    ]);
+    basemaps.forEach((value, name) => basemapOptions.appendChild(new Option(name)));
+    let currentPreview = '';
+    let pending = Promise.resolve();
+    let pendingCount = 0;
+    const embedded = new URLSearchParams(location.search).has('embedded');
+
+    function showPreview(url) {
+      currentPreview = url;
+      frame.src = url || 'about:blank';
+    }
+
+    async function request(path, options) {
+      const response = await fetch(path, options);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    }
+
+    function connectionError(error) {
+      status.textContent = 'Connection to QGIS lost: ' + error.message;
+      document.querySelectorAll('[data-action]').forEach(button => button.disabled = true);
+    }
+
+    function send(name, value = '') {
+      pendingCount++;
+      pending = pending.then(() => request('command', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, value})
+      })).catch(connectionError).then(() => {
+        pendingCount--;
+        if (!pendingCount) return updateState().then(state => {
+          if (state.settings) document.getElementById('terrain3D').checked = state.settings.terrain3D;
+        }).catch(connectionError);
+      });
+    }
+
+    async function updateState() {
+      const state = await request('state');
+      const inactive = state.settings && state.settings.terrain3D === embedded;
+      const inactiveMessage = document.getElementById('inactive');
+      inactiveMessage.hidden = !inactive;
+      inactiveMessage.textContent = embedded
+        ? 'The 3D preview is open in your browser.'
+        : 'The 2D preview is open in QGIS. You can close this tab.';
+      layerSelect.replaceChildren();
+      if (!state.layers.length) {
+        layerSelect.add(new Option('No line layers available', ''));
+      } else {
+        state.layers.forEach(layer => layerSelect.add(new Option(layer.name, layer.id)));
+        layerSelect.value = state.layer;
+      }
+      layerSelect.disabled = !state.layers.length;
+      const valid = settingInputs.every(input => input.checkValidity());
+      document.querySelectorAll('[data-action]').forEach(button => button.disabled = !state.ready || !valid || pendingCount > 0);
+      status.textContent = !valid ? 'Please correct the settings.'
+        : state.status === 'empty' ? 'Add a line layer to the QGIS project.'
+        : state.status === 'updating' ? 'Updating preview…'
+        : state.status === 'error' ? 'Could not update the preview. See the QGIS message below.' : '';
+      document.getElementById('retry').hidden = state.status !== 'error';
+      const notice = document.getElementById('notice');
+      notice.hidden = !state.message;
+      if (state.message) {
+        notice.textContent = [state.message.title, state.message.text].filter(Boolean).join(' — ');
+        notice.classList.toggle('error', state.message.error);
+      }
+      if (state.preview !== currentPreview) showPreview(state.preview);
+      return state;
+    }
+
+    function updateSettings() {
+      const detached = document.getElementById('detached').checked;
+      document.getElementById('position').disabled = detached;
+      document.getElementById('autohide').disabled = detached;
+      document.getElementById('custom-appearance').hidden =
+        document.getElementById('theme').value !== 'custom-theme';
+      for (const axis of ['x', 'y']) {
+        const min = document.getElementById(axis + 'AxisMin');
+        const max = document.getElementById(axis + 'AxisMax');
+        max.setCustomValidity(min.value && max.value && min.valueAsNumber >= max.valueAsNumber
+          ? 'Maximum must be greater than minimum.' : '');
+      }
+      if (settingInputs.every(input => input.checkValidity())) {
+        document.querySelectorAll('[data-action]').forEach(button => button.disabled = true);
+        const values = Object.fromEntries(settingInputs.map(input => [
+          input.id, input.type === 'checkbox' ? input.checked
+            : input.type === 'number' ? (input.value === '' ? null : input.valueAsNumber) : input.value
+        ]));
+        const basemap = basemaps.get(values.basemap) || {url: values.basemap, attribution: ''};
+        values.basemapUrl = basemap.url;
+        values.basemapAttribution = basemap.attribution;
+        send('setOptions', JSON.stringify(values));
+      } else {
+        updateState().catch(connectionError);
+      }
+    }
+
+    async function startSettings() {
+      const state = await updateState();
+      if (state.settings) {
+        settingInputs.forEach(input => {
+          if (input.type === 'checkbox') input.checked = state.settings[input.id];
+          else input.value = state.settings[input.id] ?? '';
+        });
+        document.getElementById('custom-appearance').hidden =
+          state.settings.theme !== 'custom-theme';
+      }
+      document.getElementById('retry').addEventListener('click', () => send('retry'));
+      layerSelect.addEventListener('change', () => send('selectLayer', layerSelect.value));
+      settingInputs.forEach(input => input.addEventListener('change', updateSettings));
+      const exportDialog = document.getElementById('export-dialog');
+      document.getElementById('export-button').addEventListener('click', () => {
+        exportDialog.returnValue = '';
+        exportDialog.showModal();
+      });
+      exportDialog.addEventListener('close', () => {
+        if (exportDialog.returnValue === 'export') {
+          send('action', exportDialog.querySelector('[name=export-format]:checked').value);
+        }
+      });
+      if (!state.settings) updateSettings();
+      setInterval(() => updateState().catch(connectionError), 1000);
+    }
+    startSettings().catch(connectionError);
+  </script>
+  </template>
+
+</body>
+
+</html>
